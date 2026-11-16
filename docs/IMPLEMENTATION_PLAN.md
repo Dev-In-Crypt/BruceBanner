@@ -36,7 +36,7 @@
 | H5 | An account with status `check` or `banned` is never opened by the pipeline until the operator resolves it. | Tasks 2.3, 3.6, 3.7 |
 | H6 | At most 3 posts per account per day (hard cap, even if config says more). | Task 0.2 config validation |
 | H7 | At most one AdsPower profile is open at a time (spec allows 1-3; we use 1 for simplicity and safety). | Task 2.2 browser lock |
-| H8 | The top banner is visible for the whole reel, full width, at least 1/6 of the frame height, never darkened or covered (including during the midroll). | Tasks 1.2, 1.3, 1.5 |
+| H8 | The top banner is visible for the whole reel (first to last frame, including the midroll), at least 1/6 of the frame height, never darkened or covered (not by the circle, the midroll, or the text plate). "На весь ролик" in the spec means "for the whole duration", NOT "full width". | Tasks 0.2, 1.2, 1.3, 1.5 |
 | H9 | Any browser error saves a screenshot + HTML dump and logs the traceback. | Task 2.2 |
 
 ### 0.3 Glossary
@@ -69,6 +69,7 @@ Source: owner's spec (`docs/spec-ru.md`). Playerok changes these often, so they 
 | Midroll position, source shorter than 20 s | any time except the last 3 s | `banners.midroll_short_insert_sec` |
 | Midroll position, source 20 s or longer | between second 10 and 20 | `banners.midroll_long_window_sec`, `banners.midroll_long_insert_sec` |
 | Top banner minimum height | 1/6 of 1920 = 320 px | `banners.top_min_height_px` |
+| Top banner layout | transparent sticker, centered, 280 px from the top, 360 px high (section 1.1) | `banners.top_y`, `banners.top_height_px` |
 | Posts per account per day | start 1-2, max 3 | `accounts[].daily_limit`, hard cap 3 |
 
 Payout formula (implemented in Task 4.2):
@@ -79,6 +80,30 @@ payout     = min(paid_views * rate / 100_000, max_payout_rub)
 ```
 
 Examples: 49,999 views = 0 RUB. 50,000 static = 200 RUB. 120,000 voiced = 700 RUB. 2,000,000 voiced = 10,000 RUB (cap).
+
+### 1.1 Reference layout (measured from two competitor reels, November 2026)
+
+The owner shared phone screenshots of two working Playerok reels by other accounts. Measured in pixels and converted to our 1080x1920 frame (Instagram shows the reel with aspect-fill, so values are +/- 5%):
+
+| Element | Example 1 (plain Playerok logo) | Example 2 (GTA VI campaign banner) | Our default |
+|---------|------|------|------|
+| Background | static photo (night sky, desert), full frame | stylized art, full frame | account image, full frame |
+| Banner shape | transparent sticker, NOT a strip | transparent sticker, NOT a strip | transparent PNG sticker |
+| Banner position | centered, top edge ~290 px | centered, top edge ~245 px | centered, `top_y = 280` |
+| Banner size | ~380 x 290 px (35% width, ~15% height) | ~540 x 480 px (50% width, 25% height) | height `top_height_px = 360` (19%), width from aspect |
+| Circle diameter | ~926 px (86% width) | ~996 px (92% width) | `circle_diameter = 940` |
+| Circle center y | ~1116 px | ~1226 px | `circle_center_y = 1160` |
+| Circle border | thin white ring, ~2 px | thin light ring | `circle_border_px = 3`, white |
+| Banner vs circle | ~85 px gap | touching, no overlap | gap >= 0 enforced by config validation |
+| Audio label | "Original audio" | "Original audio" | audio embedded in the file |
+| Caption | Japanese text unrelated to the video | Japanese text + Japanese hashtags, unrelated | per-account `captions` (owner decides the style) |
+
+What this changes compared with a naive reading of the spec:
+- The banner is a centered sticker below Instagram's own top overlay (the "Reels"/"Posts" header and author line cover roughly the top 0-280 px on a phone), not a full-width strip at y = 0.
+- Both examples keep the circle below the banner without overlapping it. Our config validation enforces this.
+- The source video inside the circle looks soft in both examples: a center square crop of a 720p vertical video is upscaled about 1.3x. Expected, not a bug. Burned-in subtitles of the source stay visible near the bottom of the circle.
+- Example 1 was posted on 15.11.2026 with the plain Playerok logo, while the spec says the GTA VI banner is mandatory in November. Do not copy it until the owner confirms the plain logo is still paid (Owner inputs, item 12).
+- The midroll cannot be seen on a still screenshot. Its placement is still an open question (Owner inputs, item 1).
 
 ---
 
@@ -420,12 +445,13 @@ active --disabled--> banned (terminal; operator can override with CLI)
    wait_for_next_step = true               # stalled but projected to cross next 50k step within 48 h -> wait
 
    [banners]
-   top = "assets/banners/top.png"          # PNG with alpha, or MP4/MOV (looped). Nov 2026: GTA VI banner
-   top_y = 0                               # px from top edge (raise if Instagram UI covers it, see Owner inputs)
+   top = "assets/banners/top.png"          # transparent PNG sticker (or MP4/MOV, looped). Nov 2026: GTA VI banner
+   top_y = 280                             # px from top edge; below Instagram's own header (section 1.1)
+   top_height_px = 360                     # banner is scaled to this height, width keeps aspect, centered
    top_min_height_px = 320                 # >= 1920/6, never lower
    midroll = "assets/banners/voiced.mp4"   # voiced banner animation; must have an audio stream; "" disables
    midroll_has_alpha = false               # true if midroll is a VP9 WebM with transparency
-   midroll_box = { x = 0, y = 360, w = 1080 }   # where the animation is drawn on the frozen frame; height keeps aspect
+   midroll_box = { x = 0, y = 660, w = 1080 }   # where the animation is drawn on the frozen frame; height keeps aspect
    midroll_min_source_sec = 12
    midroll_short_until_sec = 20
    midroll_short_insert_sec = 10           # clamped to <= duration - 3 (10 also satisfies the 10-20 s rule)
@@ -436,15 +462,17 @@ active --disabled--> banned (terminal; operator can override with CLI)
    width = 1080
    height = 1920
    fps = 30
-   circle_diameter = 860
-   circle_center_y = 1100
+   circle_diameter = 940
+   circle_center_y = 1160
+   circle_border_px = 3                    # thin ring around the circle, 0 disables
+   circle_border_color = "#FFFFFF"
    crf = 20
    preset = "medium"
    audio_bitrate = "128k"
    max_file_mb = 100
    font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
    text_overlay = false                    # optional text plate (spec module 7, optional)
-   text_y = 1600
+   text_y = 1660                           # below the circle
    text_size = 56
    banner_check_max_diff = 8.0             # mean abs pixel diff (0-255) between banner and its area in the reel
 
@@ -545,9 +573,11 @@ active --disabled--> banned (terminal; operator can override with CLI)
      - nicks unique; each account has non-empty `adspower_id`, non-empty `captions`, existing `background` file.
      - `1 <= daily_limit <= 3` (H6: hard cap 3 regardless of anything).
      - `banners.top` exists; if `banners.midroll` is non-empty it exists.
-     - `banners.top_min_height_px >= ceil(compose.height / 6)`.
-     - `banners.midroll_box.y >= banners.top_y + top_min_height_px` (the midroll never covers the top banner, H8).
-     - if `compose.text_overlay`: `text_y >= banners.top_y + top_min_height_px`.
+     - `banners.top_min_height_px >= ceil(compose.height / 6)` and `banners.top_height_px >= banners.top_min_height_px`.
+     - Let `banner_bottom = banners.top_y + banners.top_height_px`. Nothing may cover the banner (H8):
+       `banners.midroll_box.y >= banner_bottom`; `circle_center_y - circle_diameter / 2 >= banner_bottom`;
+       if `compose.text_overlay`: `text_y >= banner_bottom`.
+     - The circle fits the frame: `circle_diameter <= width` and `circle_center_y + circle_diameter / 2 <= height`.
      - `playerok.submit_by_day < playerok.deadline_days`.
      - `planner.window_start < planner.window_end`.
      - every `filter.blocked_patterns` entry compiles with `re.compile`.
@@ -647,36 +677,41 @@ def test_probe_no_audio(media):
 
 ### Task 1.2: Base composition (background + circle + top banner)
 
-**Why:** the format that pays: account background full frame, source video in a circle, Playerok banner on top for the whole reel (spec module 7, H8).
+**Why:** the format that pays: account background full frame, source video in a circle with a thin white ring, Playerok banner sticker centered at the top for the whole reel (spec module 7, H8). Target look: section 1.1.
 
 **Files:** modify `clips/video.py`.
 
 **Steps:**
 
-1. `make_frame_png(background, cfg, out_path)`: background with a transparent circular hole where the video shows through. Smooth edge via 4x supersampling:
+1. `make_frame_png(background, cfg, out_path)`: background with a transparent circular hole where the video shows through, plus the white ring on top of the hole's edge. Smooth edges via 4x supersampling:
    ```python
    def make_frame_png(background, cfg, out_path):
        c = cfg["compose"]
        W, H, D, cy = c["width"], c["height"], c["circle_diameter"], c["circle_center_y"]
        bg = ImageOps.fit(Image.open(background).convert("RGBA"), (W, H))
        s = 4
+       box = [(W - D) // 2 * s, (cy - D // 2) * s, (W + D) // 2 * s, (cy + D // 2) * s]
        mask = Image.new("L", (W * s, H * s), 255)
-       ImageDraw.Draw(mask).ellipse(
-           [(W - D) // 2 * s, (cy - D // 2) * s, (W + D) // 2 * s, (cy + D // 2) * s], fill=0)
+       ImageDraw.Draw(mask).ellipse(box, fill=0)
        bg.putalpha(mask.resize((W, H), Image.LANCZOS))
+       if c["circle_border_px"]:
+           ring = Image.new("RGBA", (W * s, H * s), (0, 0, 0, 0))
+           ImageDraw.Draw(ring).ellipse(box, outline=c["circle_border_color"], width=c["circle_border_px"] * s)
+           bg = Image.alpha_composite(bg, ring.resize((W, H), Image.LANCZOS))
        bg.save(out_path)
    ```
-2. `compose_base(src, frame_png, cfg, out, crf, preset, text=None)`: one ffmpeg call. Inputs in this fixed order: `0` source, `1` frame PNG (`-loop 1 -framerate {fps}`), `2` top banner (PNG/JPG: `-loop 1 -framerate {fps}`; MP4/MOV/WEBM: `-stream_loop -1`), `3` silent audio ONLY when the source has no audio (`-f lavfi -t {dur} -i anullsrc=r=48000:cl=stereo`). Every overlay uses `shortest=1`, and the output has `-t {dur}`, so looped inputs never extend the video. Filter graph (D = diameter, CY = center y, TOPY = `banners.top_y`):
+2. `compose_base(src, frame_png, cfg, out, crf, preset, text=None)`: one ffmpeg call. Inputs in this fixed order: `0` source, `1` frame PNG (`-loop 1 -framerate {fps}`), `2` top banner (PNG/JPG: `-loop 1 -framerate {fps}`; MP4/MOV/WEBM: `-stream_loop -1`), `3` silent audio ONLY when the source has no audio (`-f lavfi -t {dur} -i anullsrc=r=48000:cl=stereo`). Every overlay uses `shortest=1`, and the output has `-t {dur}`, so looped inputs never extend the video. Filter graph (D = diameter, CY = center y, TOPY = `banners.top_y`, TOPH = `banners.top_height_px`):
    ```
    [0:v]fps=30,scale=D:D:force_original_aspect_ratio=increase,crop=D:D,setsar=1,pad=1080:1920:(1080-D)/2:CY-D/2:black[c];
    [c][1:v]overlay=0:0:shortest=1[f];
-   [2:v]fps=30,scale=1080:-2[b];
-   [f][b]overlay=0:TOPY:shortest=1,format=yuv420p[v];
+   [2:v]fps=30,scale=-2:TOPH[b];
+   [f][b]overlay=(main_w-overlay_w)/2:TOPY:shortest=1,format=yuv420p[v];
    [A]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a]
    ```
+   The banner is scaled by height and centered horizontally (tested: a 600x480 sticker becomes 450x360 at x = 315, y = 280).
    where `[A]` is `[0:a]` or `[3:a]`. If `text` is given, append to the video chain before `format=yuv420p`: `drawtext=fontfile={font}:textfile={tmp.txt}:fontsize={size}:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y={text_y}`. Use `textfile=` (write the text to a temp file) so you never have to escape user text inside the filter string.
    Output args: `-map [v] -map [a] -t {dur} -c:v libx264 -preset {preset} -crf {crf} -r 30 -c:a aac -b:a {audio_bitrate} -movflags +faststart`.
-3. Banner size check (before running ffmpeg): scaled banner height = `round(banner_h * 1080 / banner_w)`; if `< top_min_height_px` raise `ValueError("banner too small: ...")`. Never stretch a banner to pass the check.
+3. Banner size check (before running ffmpeg): scaled banner width = `round(banner_w * top_height_px / banner_h)`; if it is wider than `compose.width`, raise `ValueError("banner too wide at top_height_px: ...")` (lower `top_height_px`, but never below `top_min_height_px`). Never stretch or squash a banner: aspect ratio is always kept.
 
 **Tests:**
 ```python
@@ -695,7 +730,8 @@ def test_compose_adds_silence_when_source_has_no_audio(media, cfg, tmp_path):
 
 **Acceptance criteria:**
 - [ ] Tests pass.
-- [ ] HUMAN CHECK (optional but recommended): open `base.mp4` from the test tmp dir (or produce one with `python -m clips build` after Task 1.6) and confirm visually: background fills the frame, circle is round with a smooth edge, banner at the top over the full width.
+- [ ] Unit test on `make_frame_png`: pixel at `(540, circle_center_y)` has alpha 0 (hole), pixel at `(540, circle_center_y - circle_diameter // 2 + 1)` is white (ring), pixel at `(10, 10)` is opaque background.
+- [ ] HUMAN CHECK (optional but recommended): open `base.mp4` from the test tmp dir (or produce one with `python -m clips build` after Task 1.6) and compare with section 1.1: background fills the frame, circle is round with a thin white ring, banner sticker centered at the top, circle below the banner.
 
 ### Task 1.3: Voiced midroll insertion
 
@@ -755,14 +791,14 @@ def test_midroll_at():
 def test_midroll_freeze_audio_and_duration(media, cfg, tmp_path):
     # build base from src25, insert midroll at T=12 (M=3)
     # 1) duration == 28 +/- 0.1
-    # 2) freeze: region_diff(frame(12.5), frame(14.5), box=(200,1300,880,1500)) < 1.0
-    #    (inside the circle, below the midroll box) while frame(11) vs frame(16) > 3.0
-    # 3) midroll visible: region_diff(frame(13.5), frame(11.9), box=(0,400,1080,900)) > 30
+    # 2) freeze: region_diff(frame(12.5), frame(14.5), box=(250,1300,830,1450)) < 1.0
+    #    (inside the circle, below the midroll box y=660..1268) while frame(11) vs frame(16) > 3.0
+    # 3) midroll visible: region_diff(frame(13.5), frame(11.9), box=(0,700,1080,1200)) > 30
     # 4) original audio stops: mean_volume of 440 Hz band in [12.2, 14.8] is >= 15 dB lower than in [2, 10]
     #    use: ffmpeg -ss S -t D -i out -vn -af "bandpass=f=440:width_type=h:w=50,volumedetect" -f null -
     #    and parse "mean_volume: X dB" from stderr
 ```
-Measured reference values from the recipe test: freeze diff 0.006, moving diff 7.7, banner diff 0.7, 440 Hz band -46.5 dB inside the midroll vs -24.1 dB outside.
+Measured reference values from the recipe test: freeze diff 0.006, moving diff 7.7, banner diff 0.7 (solid banner) and 2.8 (sticker with soft edges), 440 Hz band -46.5 dB inside the midroll vs -24.1 dB outside.
 
 **Acceptance criteria:**
 - [ ] All tests pass.
@@ -790,7 +826,7 @@ Measured reference values from the recipe test: freeze diff 0.006, moving diff 7
    - video stream: codec `h264`, `pix_fmt` `yuv420p`, width/height = `compose.width/height`, frame rate 30 (`r_frame_rate == "30/1"`);
    - audio stream exists, codec `aac`;
    - `abs(duration - expected_duration) <= 0.25`;
-   - banner check (static image banners only; for video banners log "banner check skipped: animated banner" at INFO): load banner, scale to width 1080 like ffmpeg does, take its alpha channel as mask (pixels with alpha 255 only: `alpha.point(lambda a: 255 if a == 255 else 0)`), and for each sample time in `[0.5, duration/2, duration - 0.5]` plus the middle of `midroll_window` (if any): `region_diff(frame.crop(band), banner_rgb, mask=mask) <= compose.banner_check_max_diff`, where `band = (0, top_y, 1080, top_y + banner_h)`. On failure add `"banner mismatch at t=...: diff=..."`.
+   - banner check (static image banners only; for video banners log "banner check skipped: animated banner" at INFO): load banner, scale it to height `top_height_px` keeping aspect (`bw = round(w * top_height_px / h)`), take its alpha channel as mask (fully opaque pixels only: `alpha.point(lambda a: 255 if a == 255 else 0)`; a sticker's transparent parts show the background and must not be compared), and for each sample time in `[0.5, duration/2, duration - 0.5]` plus the middle of `midroll_window` (if any): `region_diff(frame.crop(band), banner_rgb, mask=mask) <= compose.banner_check_max_diff`, where `x0 = (1080 - bw) // 2` and `band = (x0, top_y, x0 + bw, top_y + top_height_px)`. On failure add `"banner mismatch at t=...: diff=..."`.
 2. CLI `validate PATH`: prints `OK` or each problem, exit code 0/1. Expected duration for the CLI: the file's own duration (so only format and banner are checked).
 
 **Tests:**
@@ -827,7 +863,7 @@ def test_validate_banner_mismatch(built_reel, cfg):
 - [ ] `python -m clips build --source <a real meme mp4 of 25 s> --account example_account --out data/tmp/t.mp4` prints JSON with `"banner_type": "voiced"`, and `python -m clips validate data/tmp/t.mp4` prints `OK`.
 - [ ] Same with a real 8 s source: `"banner_type": "static"`, duration unchanged.
 - [ ] Build time for a 30 s source is under 60 s on the server (6 vCPU). Measured on the recipe test: 25 s source, base pass 13 s + midroll pass 8 s.
-- [ ] HUMAN CHECK: the owner watches 2 outputs on a phone and confirms they match Playerok's banner requirements (position, size, not covered, midroll behavior).
+- [ ] HUMAN CHECK: the owner watches 2 outputs on a phone and confirms they match Playerok's banner requirements (position, size, not covered, midroll behavior) and look like the reference layout in section 1.1.
 
 ---
 
@@ -1511,7 +1547,7 @@ def test_decide():
    - `msg_error(command, exc)`.
    Format numbers with a space as thousands separator for Russian readers: `f"{n:,}".replace(",", " ")`.
 
-**Tests (`tests/test_telegram.py`):** `msg_submit` contains the URL, the payout, the deadline date; contains the screen-recording line only for 500k+ views; `"—" not in text` (no em dash).
+**Tests (`tests/test_telegram.py`):** `msg_submit` contains the URL, the payout, the deadline date; contains the screen-recording line only for 500k+ views; `chr(0x2014) not in text` (no em dash).
 
 **Acceptance criteria:**
 - [ ] Tests pass.
@@ -1783,9 +1819,9 @@ def test_decide():
 
 | # | Question / input | Needed by | Default if no answer |
 |---|------------------|-----------|----------------------|
-| 1 | Playerok top banner file (PNG with alpha or MP4?) and the voiced banner file (format, does it have transparency, where on screen should it play?) | Task 1.2, 1.3 | PNG top banner; voiced MP4 drawn below the top banner at full width |
+| 1 | Playerok banner files: the top sticker (transparent PNG, as in the competitor reels) and the voiced banner (format, transparency, where on screen it plays: over the circle, full screen?) | Task 1.2, 1.3 | PNG sticker on top; voiced MP4 drawn below the top banner at full width |
 | 2 | Do Playerok's midroll timing rules ("shorter than 20 s", "at second 10-20") refer to the source length or the final reel length? | Task 1.3 | Source length; default insert at second 10 satisfies both readings for sources 13 s and longer |
-| 3 | Instagram's own UI (Reels header) covers the top ~100-150 px on phones. Do Playerok's accepted examples put the banner at the very top or lower? | Task 1.2 | `top_y = 0`; change in config if Playerok rejects |
+| 3 | Banner position below Instagram's header | Task 1.2 | Resolved from competitor reels (section 1.1): centered, `top_y = 280`, `top_height_px = 360` |
 | 4 | Background image, captions and overlay texts for every account | Task 2.1 | none, required |
 | 5 | Donor list (Instagram usernames) | Task 3.2 | none, required |
 | 6 | AdsPower: plan with Local API, API key, profiles with proxies, Instagram logged in, profile ids; UI language of Instagram in the profiles (selectors cover EN and RU) | Task 2.2 | none, required |
@@ -1794,6 +1830,8 @@ def test_decide():
 | 9 | Is the 21-day deadline counted from the publication time (our assumption)? | Task 4.2 | publication time |
 | 10 | Downloads of donor videos (Apify CDN links, yt-dlp fallback) are anonymous and go from the server IP, not tied to any account. Acceptable, or route them through `download.proxy`? | Task 3.4 | server IP, no cookies |
 | 11 | Off-server backup destination, if wanted | Task 5.3 | local backups only |
+| 12 | A competitor reel posted on 15.11.2026 uses the plain Playerok logo, not the GTA VI banner. Is the plain logo still paid in November, or only GTA VI? | Task 1.2 | GTA VI banner only |
+| 13 | Both competitor reels use Japanese captions unrelated to the video. Do we copy this style? (Captions are per-account config, so no code change either way.) | Task 2.1 | owner writes the caption sets |
 
 ---
 
