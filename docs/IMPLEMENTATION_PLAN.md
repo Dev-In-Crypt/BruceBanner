@@ -32,12 +32,13 @@
 | H1 | The pipeline NEVER deletes or edits a published reel and never touches its banner (Playerok rule: 30 days after payment). There is no delete/edit/archive code for Instagram posts at all. | Task 2.4, acceptance grep |
 | H2 | No traffic to Instagram from the server IP inside an account session. Every account session goes through its AdsPower profile (proxy is configured in AdsPower, not in code). | Task 2.2 |
 | H3 | Submission to the Playerok Telegram bot is done by a human. Never automate it. | Phase 4 |
-| H4 | A reel that fails validation is never published. | Task 1.5, 3.6 |
+| H4 | A reel that fails validation is never published. | Task 1.5, 3.7 |
 | H5 | An account with status `check` or `banned` is never opened by the pipeline until the operator resolves it. | Tasks 2.3, 3.6, 3.7 |
 | H6 | At most 3 posts per account per day (hard cap, even if config says more). | Task 0.2 config validation |
 | H7 | At most one AdsPower profile is open at a time (spec allows 1-3; we use 1 for simplicity and safety). | Task 2.2 browser lock |
 | H8 | The top banner is visible for the whole reel (first to last frame, including the midroll), at least 1/6 of the frame height, never darkened or covered (not by the circle, the midroll, or the text plate). "На весь ролик" in the spec means "for the whole duration", NOT "full width". | Tasks 0.2, 1.2, 1.3, 1.5 |
 | H9 | Any browser error saves a screenshot + HTML dump and logs the traceback. | Task 2.2 |
+| H10 | Never copy profile descriptions (bios) of other accounts, and never put brand names into our bios: Instagram may treat it as impersonating a brand and ban the account. Bios come only from cleaned post captions without any brand word. | Task 3.5 |
 
 ### 0.3 Glossary
 
@@ -71,6 +72,7 @@ Source: owner's spec (`docs/spec-ru.md`). Playerok changes these often, so they 
 | Top banner minimum height | 1/6 of 1920 = 320 px | `banners.top_min_height_px` |
 | Top banner layout | transparent sticker, centered, 280 px from the top, 360 px high (section 1.1) | `banners.top_y`, `banners.top_height_px` |
 | Posts per account per day | start 1-2, max 3 | `accounts[].daily_limit`, hard cap 3 |
+| Audience | Russian-speaking. For 500k+ reels Playerok checks the views by country; a foreign audience cuts the payout (owner's note, addendum 1a) | `/geo` records (Task 4.4), pilot comparison (Task 6.3) |
 
 Payout formula (implemented in Task 4.2):
 
@@ -96,7 +98,7 @@ The owner shared phone screenshots of two working Playerok reels by other accoun
 | Circle border | thin white ring, ~2 px | thin light ring | `circle_border_px = 3`, white |
 | Banner vs circle | ~85 px gap | touching, no overlap | gap >= 0 enforced by config validation |
 | Audio label | "Original audio" | "Original audio" | audio embedded in the file |
-| Caption | Japanese text unrelated to the video | Japanese text + Japanese hashtags, unrelated | Japanese, from a shared pool, never repeated (owner decision, 16.11.2026; Task 3.5) |
+| Caption | Japanese text unrelated to the video | Japanese text + Japanese hashtags, unrelated | language per account (`japanese` / `russian` / `none`); captions harvested weekly from popular accounts, each used once (Task 3.5) |
 
 What this changes compared with a naive reading of the spec:
 - The banner is a centered sticker below Instagram's own top overlay (the "Reels"/"Posts" header and author line cover roughly the top 0-280 px on a phone), not a full-width strip at y = 0.
@@ -104,7 +106,7 @@ What this changes compared with a naive reading of the spec:
 - The source video inside the circle looks soft in both examples: a center square crop of a 720p vertical video is upscaled about 1.3x. Expected, not a bug. Burned-in subtitles of the source stay visible near the bottom of the circle.
 - Example 1 was posted on 15.11.2026 with the plain Playerok logo, while the spec says the GTA VI banner is mandatory in November. Do not copy it until the owner confirms the plain logo is still paid (Owner inputs, item 12).
 - The midroll cannot be seen on a still screenshot. Its placement is still an open question (Owner inputs, item 1).
-- Captions: the owner decided to copy the Japanese style. Captions come from one shared pool file (`captions.file`), each caption is used once across the whole network (no reuse for `captions.reuse_after_days`). Unique captions also make reel URL capture and stats matching reliable. Why competitors do it is unknown. Possible side effect: Instagram may show the reels to a Japanese-speaking audience; whether that hurts views or Playerok approval is unknown, so watch it in the pilot (Task 6.3).
+- Captions and bios (owner addendum 1a, `docs/spec-ru.md`): the working accounts use Japanese bios and captions copied from popular Japanese posts (for example Disney Japan posts about Toy Story), unrelated to the video. Why it works is unknown, no public explanation was found. We copy the practice and test it in the pilot: some accounts get Japanese captions, some Russian, and we compare reach and audience geography. The reason to compare: Playerok wants a Russian-speaking audience and checks country stats for 500k+ reels; if Japanese captions pull the reels to a Japanese audience, payouts get cut.
 
 ---
 
@@ -125,6 +127,7 @@ What this changes compared with a naive reading of the spec:
  daily            summary  -> Telegram
  weekly           report   -> Telegram
  daily            maintenance: delete old files, backup DB, disk alert
+ weekly           harvest-captions: Apify captions of popular JP/RU accounts -> cleaned -> captions pool (used once each)
 ```
 
 ### 2.2 Repository layout (create exactly these files, nothing more unless a task says so)
@@ -143,6 +146,7 @@ clips/
   db.py                       SQLite connect, schema, tiny helpers (now_iso, etc.)
   video.py                    ffprobe, frame grab, dHash, compose (module 7), validate (module 8)
   trends.py                   Apify client, fetch trends (2), select (3), topic filter (4), download (6), dedup (5)
+  captions.py                 caption pool: harvest, clean, take, bio (addendum 1a)
   planner.py                  queue/planning + build trigger (9)
   adspower.py                 AdsPower Local API: active/start/stop
   ig_selectors.py             ALL Instagram selectors and health-signal texts (and nothing else)
@@ -156,6 +160,7 @@ tests/
   conftest.py                 tmp DB fixture, synthetic media fixtures (ffmpeg lavfi)
   test_video.py
   test_trends.py
+  test_captions.py
   test_planner.py
   test_instagram.py           pure functions only (health classification, followers parsing)
   test_submit.py
@@ -186,7 +191,6 @@ data/locks/            flock files
 data/tmp/              temp files for ffmpeg
 assets/backgrounds/    one image per account (owner provides)
 assets/banners/        Playerok banner files (owner provides)
-assets/captions_ja.txt Japanese caption pool (owner provides)
 ```
 
 ### 2.3 Conventions
@@ -210,6 +214,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   status_reason  TEXT,                           -- e.g. 'checkpoint', 'action_block', 'logged_out', 'manual'
   paused_until   TEXT,                           -- only for status 'paused'
   followers      INTEGER,
+  bio_set_at     TEXT,                           -- set-bio done (Task 3.5)
+  bio_caption_id INTEGER,
   notion_page_id TEXT,
   updated_at     TEXT NOT NULL
 );
@@ -236,6 +242,19 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE INDEX IF NOT EXISTS sources_donor_posted ON sources(donor, posted_at);
 CREATE INDEX IF NOT EXISTS sources_state ON sources(state);
 
+CREATE TABLE IF NOT EXISTS captions (            -- caption pool, addendum 1a (Task 3.5)
+  id          INTEGER PRIMARY KEY,
+  lang        TEXT NOT NULL CHECK (lang IN ('japanese','russian')),
+  text        TEXT NOT NULL UNIQUE,              -- cleaned text
+  source      TEXT,                              -- caption donor username
+  source_name TEXT,                              -- caption donor display name
+  source_url  TEXT,
+  fetched_at  TEXT NOT NULL,
+  used_at     TEXT,                              -- NULL = free; each caption is used once in the network
+  used_for    TEXT                               -- 'pub:<id>' or 'bio:<nick>'
+);
+CREATE INDEX IF NOT EXISTS captions_free ON captions(lang, used_at);
+
 CREATE TABLE IF NOT EXISTS publications (
   id               INTEGER PRIMARY KEY,
   source_id        INTEGER REFERENCES sources(id),   -- NULL only for manual `publish-file`
@@ -248,7 +267,10 @@ CREATE TABLE IF NOT EXISTS publications (
   background       TEXT,                             -- background file name (for reports)
   banner_type      TEXT CHECK (banner_type IN ('static','voiced')),
   banner_file      TEXT,                             -- top banner file name (for reports)
-  caption          TEXT,
+  caption          TEXT,                             -- '' when the account's caption_lang is 'none'
+  caption_id       INTEGER REFERENCES captions(id),
+  caption_lang     TEXT,                             -- copied from the account at planning time
+  ru_audience_pct  INTEGER,                          -- % of views from Russia, entered by the operator (/geo)
   share_clicked_at TEXT,                             -- set right after clicking Share
   published_at     TEXT,
   ig_shortcode     TEXT UNIQUE,
@@ -348,6 +370,8 @@ active --disabled--> banned (terminal; operator can override with CLI)
 | `select` | 3 | Selection + topic filter |
 | `download` | 3 | Download selected + dedup |
 | `trends` | 3 | `fetch-trends` + `select` + `download` |
+| `harvest-captions [--from-file JSON]` | 3 | Collect, clean and store captions from popular JP/RU accounts |
+| `set-bio --account NICK [--force]` | 3 | Set the profile bio from the caption pool (once per account) |
 | `plan` | 3 | Plan today's slots, build and validate them |
 | `publish` | 3 | Publish due built publications |
 | `stats [--from-file JSON]` | 4 | Collect views, run submit logic, notify, then notion-sync |
@@ -563,24 +587,36 @@ active --disabled--> banned (terminal; operator can override with CLI)
    min_free_disk_gb = 10
 
    [captions]
-   file = "assets/captions_ja.txt"         # Japanese captions, one per block, blocks separated by an empty line
-   reuse_after_days = 60                   # a caption is not used again anywhere in the network for N days
-   low_pool_alert = 30                     # daily summary warns when fewer free captions remain
+   # Popular accounts whose post captions we copy (cinema, anime, travel, fashion...). Replace the examples.
+   donors_japanese = ["jp_movies_example", "jp_anime_example", "jp_travel_example", "jp_fashion_example"]
+   donors_russian = ["ru_lifestyle_example"]
+   results_per_donor = 30
+   fresh_days = 60
+   min_likes = 1000                        # only popular posts; hidden likes (-1) count as passing
+   keep_hashtags = true
+   min_chars = 15
+   bio_max_chars = 150                     # Instagram bio limit
+   low_pool_alert = 50                     # per language: daily summary warns below this many free captions
+   # Removed from the first line of a caption; a bio must not contain any of them anywhere (H10).
+   # The caption donor's own username and display name are always added to this list.
+   brand_words = ["公式", "official", "オフィシャル", "®", "™", "Disney", "ディズニー", "Pixar", "ピクサー",
+                  "Marvel", "マーベル", "Star Wars", "スター・ウォーズ", "Netflix", "ネットフリックス"]
 
    [[accounts]]
    nick = "example_account"
    adspower_id = "jabc123"                 # AdsPower profile user_id
    background = "assets/backgrounds/example_account.jpg"
    daily_limit = 1
+   caption_lang = "japanese"               # japanese | russian | none (post captions and bio)
    overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)
    ```
 3. `clips/config.py`:
    - `ROOT = Path(__file__).resolve().parent.parent`.
    - `load_env(path)`: tiny `.env` parser (skip blank and `#` lines, split on first `=`, strip quotes, `os.environ.setdefault`). No python-dotenv.
-   - `load(path=None) -> dict`: `load_env(ROOT/".env")`, read `CLIPS_CONFIG` env var or `ROOT/"config.toml"` with `tomllib`, resolve relative paths (`data_dir`, `banners.top`, `banners.midroll`, `captions.file`, each `accounts[].background`) against `ROOT`, create data subfolders (`raw sources build screenshots backups locks tmp`), call `validate(cfg)`, return dict. Add `cfg["data"] = Path(...)` for convenience.
+   - `load(path=None) -> dict`: `load_env(ROOT/".env")`, read `CLIPS_CONFIG` env var or `ROOT/"config.toml"` with `tomllib`, resolve relative paths (`data_dir`, `banners.top`, `banners.midroll`, each `accounts[].background`) against `ROOT`, create data subfolders (`raw sources build screenshots backups locks tmp`), call `validate(cfg)`, return dict. Add `cfg["data"] = Path(...)` for convenience.
    - `validate(cfg)`: collect ALL problems into a list, then `raise SystemExit("config errors:\n- ...")` if any. Checks:
      - nicks unique; each account has non-empty `adspower_id` and an existing `background` file.
-     - `captions.file` exists (its content is checked by `planner.load_captions`, Task 3.5; do not import planner here, that would be a circular import).
+     - each account's `caption_lang` is `japanese`, `russian` or `none`; `captions.donors_<lang>` is non-empty for every language some account uses.
      - `1 <= daily_limit <= 3` (H6: hard cap 3 regardless of anything).
      - `banners.top` exists; if `banners.midroll` is non-empty it exists.
      - `banners.top_min_height_px >= ceil(compose.height / 6)` and `banners.top_height_px >= banners.top_min_height_px`.
@@ -883,13 +919,13 @@ Prerequisites (owner): AdsPower Linux client installed on the server with Local 
 
 ### Task 2.1: Accounts in config and DB (spec module 1)
 
-**Why:** each account looks different (background) and the pipeline must know where it may post. Captions are not per account: they come from the shared Japanese pool (Task 3.5).
+**Why:** each account looks different (background, caption language) and the pipeline must know where it may post. Caption texts are not per account: they come from the shared pool (Task 3.5).
 
 **Files:** create `run_sync_accounts` in `clips/db.py` (it is 15 lines, no new module); wire `sync-accounts` and `account-status` in `__main__.py`.
 
 **Steps:**
 
-1. Static fields (nick, adspower_id, background, overlay_texts, daily_limit) live ONLY in config. Runtime fields (status, followers, ...) live ONLY in the DB. No duplication.
+1. Static fields (nick, adspower_id, background, caption_lang, overlay_texts, daily_limit) live ONLY in config. Runtime fields (status, followers, ...) live ONLY in the DB. No duplication.
 2. `sync_accounts(con, cfg)`: `INSERT OR IGNORE INTO accounts(nick, status, updated_at) VALUES (?, 'active', now)` for each config account. Log a WARNING for DB accounts missing from config (never delete them; their history matters). Call it at the start of `plan`, `publish`, `stats` (cheap, keeps things in sync).
 3. `account-status NICK STATUS [--reason]`: validate STATUS in the 4 allowed values, call `set_account_status`.
 4. Helper `account_cfg(cfg, nick) -> dict` (raise `KeyError` with a clear message).
@@ -1098,11 +1134,11 @@ def test_classify():
    5. If `REELS_NOTICE_OK` appears within 5 s, click it.
    6. If `CROP_BUTTON` exists: click it, click `CROP_ORIGINAL` (our file is already 9:16).
    7. Click `NEXT` (crop step), pause, click `NEXT` (edit step).
-   8. Click `CAPTION`, type the caption with `page.keyboard.type(caption, delay=random.randint(*typing_delay_ms))`. Captions are Japanese: `keyboard.type` inserts any Unicode text (Japanese, emoji) directly, no IME needed, and `\n` becomes an Enter press. In the dry-run screenshot check that the Japanese text and its line breaks look exactly like the pool entry.
+   8. If the caption is empty (`caption_lang = none`) skip this step. Otherwise click `CAPTION` and type it with `page.keyboard.type(caption, delay=random.randint(*typing_delay_ms))`. `keyboard.type` inserts any Unicode text (Japanese, emoji) directly, no IME needed, and `\n` becomes an Enter press. In the dry-run screenshot check that the text and its line breaks look exactly like the pool entry.
    9. **Dry-run stops here**: screenshot `before_share`, close the dialog with `Escape` (confirm "Discard" / "Отменить" if asked), return.
    10. Record `share_clicked_at = now` in the DB BEFORE clicking (if the process dies after the click we still know a post may exist). Click `SHARE`.
    11. Wait for `SHARED_OK` up to `upload_timeout_sec`. While waiting, every 10 s run `classify_health` on the page text: `action_block` -> raise `HealthProblem("action_block")`.
-4. `find_reel(page, nick, caption, known: set[str]) -> str | None`: `goto https://www.instagram.com/{nick}/reels/`, wait for `REEL_LINK`, take the first 6 hrefs, extract shortcodes with `re.search(r"/reel/([\w-]+)", href)`, drop ones in `known` (all `ig_shortcode` values in the DB), then for each remaining: `goto` the reel page and check that the page text contains `caption[:30]`, comparing both after collapsing whitespace (`" ".join(s.split())`, because line breaks render differently); return the first match. Retry the whole thing 3 times with 20 s waits (Instagram may need time to process). Returns None if not found. Pinned reels are why we check the caption instead of taking the first link.
+4. `find_reel(page, nick, caption, known: set[str]) -> str | None`: `goto https://www.instagram.com/{nick}/reels/`, wait for `REEL_LINK`, take the first 6 hrefs, extract shortcodes with `re.search(r"/reel/([\w-]+)", href)`, drop ones in `known` (all `ig_shortcode` values in the DB), then for each remaining: `goto` the reel page and check that the page text contains `caption[:30]`, comparing both after collapsing whitespace (`" ".join(s.split())`, because line breaks render differently); return the first match. Retry the whole thing 3 times with 20 s waits (Instagram may need time to process). Returns None if not found. Pinned reels are why we check the caption instead of taking the first link. With an empty caption take the first unknown shortcode (`# ponytail: no caption to match, a manually pinned unknown reel would be picked; operator must not pin reels by hand`).
 5. `read_followers(page, nick) -> int | None`: `goto https://www.instagram.com/{nick}/`, read `meta[name="description"]` content, parse with the pure function below. Best effort: None on any failure.
    ```python
    MULT = {"k": 1e3, "к": 1e3, "тыс": 1e3, "m": 1e6, "м": 1e6, "млн": 1e6}
@@ -1125,7 +1161,7 @@ def test_classify():
    - `HealthProblem(h)`: `apply_health(...)` with the screenshot; if `share_clicked_at` is set mark `unconfirmed`, else `failed` with error `health:<h>`.
    - `ProfileBusy` / `AdsPowerError`: leave the publication as is (it will be retried next run until `max_delay_hours` passes), log WARNING.
    - Any other exception: screenshot already saved by `session`; if `share_clicked_at` is set mark `unconfirmed`, else `failed` with the error text; alert with the screenshot.
-7. `publish-file --account --file --banner-type static|voiced [--caption]`: refuse if a publication with the same `file_path` and state `published`/`unconfirmed` exists (idempotency). Insert a publication (`source_id NULL`, `state='built'`, `scheduled_at=now`, caption = given or `planner.pick_caption(...)` from the Japanese pool (Task 3.5; until Phase 3 the `--caption` flag is required), `banner_type` from the required flag), then `browser_lock` + `publish_one`.
+7. `publish-file --account --file --banner-type static|voiced [--caption]`: refuse if a publication with the same `file_path` and state `published`/`unconfirmed` exists (idempotency). Insert a publication (`source_id NULL`, `state='built'`, `scheduled_at=now`, caption = given, else `captions.take_caption` for the account's `caption_lang` (Task 3.5; until Phase 3 the `--caption` flag is required), `banner_type` from the required flag), then `browser_lock` + `publish_one`.
 
 **Tests:**
 ```python
@@ -1326,7 +1362,122 @@ def test_dhash_different_videos(media):
 - [ ] Real run: selected sources become `ready` with files in `data/sources/`; running `download` again downloads nothing.
 - [ ] Manually insert a second source row whose file is a re-encode of a ready one, run `download`: it becomes `duplicate`.
 
-### Task 3.5: Planner (spec module 9)
+### Task 3.5: Caption pool and profile bios (owner addendum 1a)
+
+**Why:** the working competitor accounts use Japanese bios and captions copied from popular Japanese posts, unrelated to the video (section 1.1). Why it works is unknown, so we copy it and test it in the pilot against Russian captions (Task 6.3). Every caption is used once in the whole network, so our accounts are never linked to each other by identical text. The language is set per account because Playerok wants a Russian-speaking audience and checks country stats for 500k+ reels.
+
+**Files:** create `clips/captions.py`, `tests/test_captions.py`; add bio selectors to `clips/ig_selectors.py`; add `set_bio` to `clips/instagram.py`.
+
+**Steps:**
+
+1. Cleaning, pure (tested on competitor-style captions while writing this plan, including the Toy Story example):
+   ```python
+   URL_RE = re.compile(r"https?://\S+|www\.\S+")
+   MENTION_RE = re.compile(r"@[\w.]+")
+   HASHTAG_RE = re.compile(r"#\S+")
+   BRACKET_RE = re.compile(r"【[^】]*】|\[[^\]]*\]")
+   SCRIPT = {"japanese": re.compile(r"[぀-ヿ一-鿿]"), "russian": re.compile(r"[а-яё]", re.I)}
+
+   def has_brand(s: str, words) -> bool:
+       s = s.lower()
+       return any(w.lower() in s for w in words if w)
+
+   def clean_caption(text, lang, brand_words, cfg) -> str | None:
+       """Cleaned caption, or None if unusable. Brand names are removed from the first line."""
+       c = cfg["captions"]
+       t = MENTION_RE.sub("", URL_RE.sub("", text or ""))
+       t = HASHTAG_RE.sub(lambda m: "" if not c["keep_hashtags"] or has_brand(m[0], brand_words) else m[0], t)
+       t = BRACKET_RE.sub(lambda m: "" if has_brand(m[0], brand_words) else m[0], t)   # e.g. 【ディズニー公式】
+       lines = "\n".join(" ".join(l.split()) for l in t.splitlines()).strip().split("\n")
+       if has_brand(lines[0], brand_words):
+           if len(lines) == 1:
+               return None
+           lines = lines[1:]
+       t = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+       letters = [ch for ch in t if ch.isalpha()]
+       if not c["min_chars"] <= len(t) <= 2200 or t.count("#") > 30 or not letters:
+           return None                                   # Instagram limits: 2200 chars, 30 hashtags
+       if sum(bool(SCRIPT[lang].match(ch)) for ch in letters) / len(letters) < 0.5:
+           return None                                   # mostly not the expected language
+       return None if trends.blocked_reason(t, "", cfg) else t
+   ```
+2. `harvest(cfg, con, dry, from_file=None)` (command `harvest-captions`, weekly timer): for each language used by at least one account (`japanese`, `russian`): one Apify run (`trends.run_actor`) with `{"username": captions.donors_<lang>, "resultsLimit": results_per_donor, "onlyPostsNewerThan": f"{fresh_days} days", "skipPinnedPosts": false}`; `dump_raw`. Keep items with `likesCount >= min_likes` or `likesCount == -1` (hidden). Brand words per item = `captions.brand_words + [ownerUsername, ownerFullName]`. `clean_caption(...)`; if not None: `INSERT OR IGNORE INTO captions (lang, text, source, source_name, source_url, fetched_at)` (UNIQUE text makes reruns harmless). Log: fetched, kept, total free per language. We only harvest POST captions, never profile descriptions (H10). The reel scraper returns reels only; if photo posts are needed later, switch to a post scraper actor after checking its input schema.
+3. Taking a caption for a publication (called by the planner inside its transaction, and by `publish-file`):
+   ```python
+   def take_caption(con, lang, used_for) -> tuple[int | None, str] | None:
+       """Reserve a random free caption. ('none' -> (None, '')). None = pool empty for this language."""
+       if lang == "none":
+           return None, ""
+       row = con.execute("SELECT id, text FROM captions WHERE lang = ? AND used_at IS NULL "
+                         "ORDER BY random() LIMIT 1", (lang,)).fetchone()
+       if row is None:
+           return None
+       cur = con.execute("UPDATE captions SET used_at = ?, used_for = ? WHERE id = ? AND used_at IS NULL",
+                         (db.now_iso(), used_for, row["id"]))
+       return (row["id"], row["text"]) if cur.rowcount == 1 else take_caption(con, lang, used_for)
+   ```
+   A caption is never freed again, even if the publication later fails ("used once" is the rule).
+4. Bio (command `set-bio --account NICK [--force]`; run once when an account is onboarded, see Runbook):
+   - Refuse if `caption_lang = none`, or `accounts.bio_set_at` is set and no `--force`, or DB status is `check`/`banned`.
+   - Pick (pure-ish, H10):
+     ```python
+     def pick_bio(con, cfg, lang) -> tuple[int, str] | None:
+         brands = cfg["captions"]["brand_words"]
+         for r in con.execute("SELECT id, text, source, source_name FROM captions "
+                              "WHERE lang = ? AND used_at IS NULL ORDER BY random()", (lang,)):
+             bio = re.sub(r"\n{3,}", "\n\n", HASHTAG_RE.sub("", r["text"])).strip()
+             if 0 < len(bio) <= cfg["captions"]["bio_max_chars"] and \
+                     not has_brand(bio, brands + [r["source"], r["source_name"]]):
+                 return r["id"], bio
+         return None
+     ```
+   - Browser: `browser_lock` + `session` -> `goto https://www.instagram.com/accounts/edit/` -> health check -> click `BIO_TEXTAREA`, select all (`Control+A`), type the bio with human delays -> dry-run: screenshot `before_bio_submit`, stop -> click `BIO_SUBMIT` -> reload -> read the textarea value and compare with the bio after collapsing whitespace -> mark the caption used (`bio:<nick>`), set `accounts.bio_set_at`, `bio_caption_id`.
+   - Selectors (starting points, verify in the dry-run screenshot, fix only in `ig_selectors.py`):
+     ```python
+     BIO_TEXTAREA = ['textarea#pepBio', 'textarea[name="biography"]',
+                     'textarea[aria-label="Bio"]', 'textarea[aria-label="О себе"]']
+     BIO_SUBMIT = ['div[role="button"]:text-is("Submit")', 'div[role="button"]:text-is("Отправить")',
+                   'button:text-is("Submit")', 'button:text-is("Отправить")']
+     ```
+5. Audience geography (needed for the pilot comparison): Apify without login cannot see where viewers are. The operator reads it in the Instagram app (reel insights, audience by country; needs a professional account, which Playerok's 500k+ stats screen recording needs anyway) and records it with the bot command `/geo <pub_id> <percent of views from Russia>` (Task 4.4). Reports compare languages (Task 5.2).
+
+**Tests (`tests/test_captions.py`):**
+```python
+B = ["公式", "official", "ディズニー", "Disney", "disneyjp"]
+# cfg: keep_hashtags True, min_chars 15, blocked_patterns from config.example.toml
+EX1 = "サンセットに染まるサントロペで過ごす、忘れられない特別な夜。優雅なシルクの輝きと夕陽の黄金色、そして沢な雰囲気が、まるで夢のようなひとときを演出しました。"
+EX2 = "🦕興行収入100億円突破 ・ 時が流れても変わらないものとは...? ・ かつて子どもだったすべての人へ #トイストーリー30周年 #トイストーリー5 #ディズニー写真部"
+
+def test_clean_caption(cfg):
+    f = lambda t, lang="japanese": captions.clean_caption(t, lang, B, cfg)
+    assert f(EX1) == EX1
+    r = f(EX2); assert "#ディズニー写真部" not in r and "#トイストーリー5" in r       # brand hashtag removed
+    assert f("【ディズニー公式】\nトイストーリー5、ついに公開！楽しみ\nhttps://disney.jp @disneyjp\n#映画 #ディズニー") \
+        == "トイストーリー5、ついに公開！楽しみ\n\n#映画"
+    assert f("Disney Japan official\n夏の思い出をもう一度、海辺の風景とともに") == "夏の思い出をもう一度、海辺の風景とともに"
+    assert f("ディズニーの夏、始まる") is None                       # single line with a brand
+    assert f("Beautiful sunset at the beach tonight") is None        # not Japanese
+    assert f("戦争の映画を観た夜、静かに考える") is None                # forbidden topic
+    assert f("短い") is None                                          # too short
+    assert f("Подпишись @memes_ru! Вечер у моря, тёплый ветер и тишина https://t.me/x", "russian") \
+        == "Подпишись ! Вечер у моря, тёплый ветер и тишина"
+    # keep_hashtags = False -> no "#" left in EX2
+
+def test_take_caption_once(con):
+    # 2 free japanese captions: two takes return both, the third returns None; lang 'none' -> (None, '')
+
+def test_pick_bio(con, cfg):
+    # candidates: a 200-char caption, one containing "Disney", one 80-char clean caption with "#旅行"
+    # -> returns the 80-char one, without the hashtag
+```
+
+**Acceptance criteria:**
+- [ ] Tests pass.
+- [ ] Real run with 2 Japanese donors: `sqlite3 data/clips.db "select lang, count(*), sum(used_at is null) from captions group by 1"` shows new rows; a second run right after adds none.
+- [ ] HUMAN CHECK: the owner reads 20 random cleaned captions (with a translator): no brand header lines, no @mentions or links, neutral topics.
+- [ ] HUMAN CHECK: `set-bio --account X --dry-run` screenshot shows the bio typed; the real run shows it on the profile; a second run refuses.
+
+### Task 3.6: Planner (spec module 9)
 
 **Why:** spread reels over active accounts within daily limits at random times inside a window, never put the same reel on two accounts within N days, and give flops a second chance.
 
@@ -1348,35 +1499,10 @@ def test_dhash_different_videos(media):
    - count of non-failed publications `< 1 + max_reposts`;
    - target account has never posted this source.
    New row: `attempt = max(attempt) + 1`. If the source file was deleted by maintenance, call `download_one` again (yt-dlp fallback handles expired Apify URLs).
-4. Japanese caption pool (owner decision, section 1.1). Every publication gets a caption no other publication in the network used within `captions.reuse_after_days`:
-   ```python
-   def load_captions(cfg) -> list[str]:
-       """Blocks of text separated by an empty line; blocked topics are dropped (and logged)."""
-       text = Path(cfg["captions"]["file"]).read_text(encoding="utf-8")
-       caps = [c.strip() for c in re.split(r"\n\s*\n", text) if c.strip()]
-       bad = [c[:30] for c in caps if len(c) > 2200 or c.count("#") > 30]   # Instagram limits
-       if bad:
-           raise ValueError(f"captions over Instagram limits: {bad}")
-       pool = [c for c in caps if not trends.blocked_reason(c, "", cfg)]
-       if not pool:
-           raise ValueError("caption pool is empty")
-       return pool
-
-   def pick_caption(con, cfg, pool: list[str], rng, now) -> tuple[str, int]:
-       """Return (caption, free_left). Free = never used, or last used before the reuse window."""
-       since = db.iso(now - timedelta(days=cfg["captions"]["reuse_after_days"]))
-       last = dict(con.execute("SELECT caption, MAX(created_at) FROM publications "
-                               "WHERE caption IS NOT NULL GROUP BY caption").fetchall())
-       free = [c for c in pool if last.get(c, "") < since]
-       if free:
-           return rng.choice(free), len(free) - 1
-       return min(pool, key=lambda c: last[c]), 0   # pool exhausted: least recently used
-   ```
-   The pool file is written by the owner (or generated on request); it lives in `assets/` and is not in git. Keep its topics neutral (food, travel, nature, daily life): Playerok's forbidden topics apply to captions too, and the Japanese entries in `filter.blocked_patterns` drop obvious violations.
-5. `plan(cfg, con, dry)`:
+4. `plan(cfg, con, dry)`:
    - `sync_accounts`, `resume_paused_accounts` (+ Telegram "Аккаунт @nick снова активен").
    - Expire stale slots: publications `planned`/`built` with `scheduled_at < now - max_delay_hours` -> `failed`, error `slot_expired`, delete their built file.
-   - For each config account with DB status `active`: `taken` = its publications scheduled today (local day) with state not `failed`; for each of `daily_limit - taken` free slots: pick a source (fresh, else repost for this account), pick a slot (None -> stop for this account), insert the publication (`state='planned'`, `caption` = `pick_caption(...)` with the pool loaded once per run, `created_at`). The `UNIQUE(source_id, attempt)` constraint protects against double planning; catch `sqlite3.IntegrityError` and skip.
+   - For each config account with DB status `active`: `taken` = its publications scheduled today (local day) with state not `failed`; for each of `daily_limit - taken` free slots: pick a source (fresh, else repost for this account), pick a slot (None -> stop for this account), then in ONE transaction: `captions.take_caption(con, account caption_lang, ...)` (pool empty for that language -> skip the slot, log WARNING; the daily summary already warned), insert the publication (`state='planned'`, `caption`, `caption_id`, `caption_lang`, `created_at`), set `captions.used_for = 'pub:<id>'`. The `UNIQUE(source_id, attempt)` constraint protects against double planning; catch `sqlite3.IntegrityError` and skip (the transaction rollback also frees the caption).
    - Build every `planned` publication (including ones from earlier runs): `out = data/build/pub_{id}.mp4`, `video.build(source.file_path, account, cfg, out, text=...)`, store `file_path`, `background`, `banner_type`, `banner_file`, `state='built'`. Build/validation error -> publication `failed`, source `failed` with reason, Telegram alert.
    - Dry-run: print the plan table (account, local time, source shortcode, score, attempt), build nothing.
 
@@ -1399,14 +1525,6 @@ def test_same_source_never_on_two_accounts(con, cfg):
 
 def test_paused_account_not_planned(con, cfg): ...
 
-def test_load_captions_splits_blocks_and_drops_blocked(tmp_path, cfg):
-    # file: "夕焼けの海辺で過ごす特別な夜。\n#旅行 #夕日\n\n朝のコーヒーと静かな時間。\n\n\n選挙の話\n\n雨の日の散歩も悪くない。"
-    # -> 3 captions; the first keeps its line break; "選挙の話" is dropped
-
-def test_pick_caption(con, cfg):
-    # pool of 3; caption 0 used yesterday, caption 1 used 90 days ago (reuse_after_days = 60)
-    # 50 picks with random.Random(1) return only captions 1 and 2
-    # after captions 1 and 2 are used 2 and 3 days ago: returns (caption 2, 0), the least recently used
 ```
 (For planner tests, monkeypatch `video.build` to write a dummy file and return a fixed dict.)
 
@@ -1414,7 +1532,7 @@ def test_pick_caption(con, cfg):
 - [ ] Tests pass.
 - [ ] `python -m clips plan --dry-run` on real data prints a sensible plan; `plan` builds files into `data/build/` and each built file passes `python -m clips validate`.
 
-### Task 3.6: Publish job
+### Task 3.7: Publish job
 
 **Why:** turns due, built publications into posts, sequentially, with human-like pacing.
 
@@ -1432,7 +1550,7 @@ def test_pick_caption(con, cfg):
 
 **Acceptance criteria (Phase 3 exit):**
 - [ ] `python -m clips trends && python -m clips plan && python -m clips publish --dry-run` run end-to-end on one real account with `daily_limit = 1`.
-- [ ] HUMAN CHECK: let it run for 2 days on one account (timers can be started by hand or with `systemd-run --on-calendar`): exactly `daily_limit` posts per day, inside the window, no duplicates, every caption is Japanese and none repeats.
+- [ ] HUMAN CHECK: let it run for 2 days on one account (timers can be started by hand or with `systemd-run --on-calendar`): exactly `daily_limit` posts per day, inside the window, no duplicates, every caption is in the account's language and none repeats across accounts.
 
 ---
 
@@ -1450,7 +1568,7 @@ def test_pick_caption(con, cfg):
    - usernames = accounts with status not `banned` that have publications in the last `deadline_days + 1` days.
    - One actor call: `{"username": usernames, "resultsLimit": stats_results_per_account, "onlyPostsNewerThan": f"{deadline_days + 1} days", "skipPinnedPosts": false}` (our own pinned reels need stats too). `dump_raw(cfg, "stats", items)`.
    - Map `shortCode` -> publication (`state='published'`). For each match: `INSERT OR IGNORE INTO view_snapshots(publication_id, taken_at, views, likes)` with `taken_at = now`, and `UPDATE publications SET last_views = ?`.
-   - Resolve `unconfirmed` publications: an item with `ownerUsername == account`, `timestamp >= share_clicked_at - 10 min`, caption starting with the publication caption's first 30 chars (compare after collapsing whitespace on both sides), and a shortcode not yet in the DB -> set `state='published'`, `published_at = item timestamp`, `ig_shortcode`, `ig_url`. Unresolved after 48 h -> alert once "Не найден рилс pub#{id} @{nick}, проверьте вручную".
+   - Resolve `unconfirmed` publications: an item with `ownerUsername == account`, `timestamp >= share_clicked_at - 10 min`, caption starting with the publication caption's first 30 chars (compare after collapsing whitespace on both sides; an empty caption matches on owner and time only), and a shortcode not yet in the DB -> set `state='published'`, `published_at = item timestamp`, `ig_shortcode`, `ig_url`. Unresolved after 48 h -> alert once "Не найден рилс pub#{id} @{nick}, проверьте вручную".
    - Published reels younger than `deadline_days` missing from the results: WARNING log; if `submit_status` is `candidate`/`submit_now`, alert once (the reel may have been removed by Instagram).
 2. HUMAN CHECK (one time, during this task): for 3 of our reels compare the views number in the Instagram app with `videoPlayCount` and `videoViewCount` from the raw dump. Set `apify.views_field` to the one that matches what the app shows (Playerok records what the app shows). Note the result in `docs/RUNBOOK.md`.
 
@@ -1585,6 +1703,7 @@ def test_decide():
      Ожидаемая сумма: {payout} ₽
      Подать до: {dd.mm} (дедлайн {dd.mm})
      ⚠️ Нужна запись экрана статистики с телефона     (only if needs_screen_recording)
+     Запишите долю просмотров из России: /geo {id} <процент>     (only if needs_screen_recording)
      ```
      buttons: `[("Подано", f"sub:{id}")], [("Одобрено", f"ok:{id}"), ("Отклонено", f"rej:{id}")]`.
    - `msg_account(nick, status, reason)` with button `[("Проверку прошёл", f"acc:{nick}")]` for status `check`.
@@ -1617,6 +1736,7 @@ def test_decide():
      - if `pending[chat]` is `("ok", id)`: parse an integer (strip spaces and "₽"); must be `0 <= amount <= max_payout_rub`, else reply "Нужна сумма числом от 0 до 10000" and keep pending; on success: `submit_status='approved'`, `amount_rub`, `decided_at=now`; clear pending; reply.
      - if `("rej", id)`: `submit_status='rejected'`, `reject_reason=text[:500]`, `decided_at=now`; clear; reply.
      - `/status`: reply with the summary text from Task 4.5.
+     - `/geo <pub_id> <percent>`: integer 0..100, store `publications.ru_audience_pct`; reply "pub#{id}: Россия {p}%". Any reel can be recorded, not only 500k+ (the pilot needs a sample from every language group).
      - anything else: reply a 3-line help.
    - All writes are idempotent (pressing a button twice sets the same values).
 2. `run_bot(cfg, con, args, dry)`: long polling loop:
@@ -1662,7 +1782,7 @@ def test_decide():
   pub#{id} @{acc} {views} просм., подать до {dd.mm}
 Кандидаты: {n} · Поданы, ждут решения: {n}
 Одобрено в этом месяце: {sum} ₽
-Свободных подписей: {n}            (prefix ⚠️ and "пополните файл" when n < captions.low_pool_alert)
+Свободных подписей: japanese {n}, russian {m}     (⚠️ before a language with fewer than captions.low_pool_alert, only languages in use)
 Свободно на диске: {gb} ГБ
 ```
 `summary` command sends it (prints in dry-run).
@@ -1700,14 +1820,14 @@ def test_decide():
 
 ### Task 5.2: Weekly report (spec module 16)
 
-**Why:** learn what works: which accounts, donors, backgrounds and banner types bring views and money, and what share of reels passes 50k.
+**Why:** learn what works: which accounts, donors, backgrounds, banner types and caption languages bring views and money, and what share of reels passes 50k.
 
 **Files:** modify `clips/reports.py`; create `tests/test_reports.py`.
 
 **Steps:**
 
 1. `weekly(con, cfg, now) -> str`: two parts.
-   - Reels published in the last 7 days, grouped separately by `account`, `donor` (via source), `background`, `banner_type`: count, total views (`last_views`), average views, `% >= min_paid_views`.
+   - Reels published in the last 7 days, grouped separately by `account`, `donor` (via source), `background`, `banner_type`, `caption_lang`: count, total views (`last_views`), median views, `% >= min_paid_views`. For `caption_lang` also: average `ru_audience_pct` over reels that have it, and how many have it.
    - Money decided in the last 7 days (`decided_at`): approved sum by account; rejected count with reasons (top 5).
    - Totals line: reels, views, % >= 50k, approved ₽, pending submissions.
 2. Format as `<pre>` monospace tables, top 10 rows per group by views, keep under 4096 characters (truncate groups, never the totals).
@@ -1791,6 +1911,7 @@ def test_decide():
    | clips-report.timer | `Mon *-*-* 10:10:00 Europe/Moscow` | report |
    | clips-notion.timer | `*-*-* *:45:00` | notion-sync |
    | clips-maintenance.timer | `*-*-* 04:30:00 Europe/Moscow` | maintenance |
+   | clips-captions.timer | `Sun *-*-* 05:10:00 Europe/Moscow` | harvest-captions |
    Example:
    ```ini
    [Unit]
@@ -1812,7 +1933,7 @@ def test_decide():
 
 **Acceptance criteria:**
 - [ ] `systemd-analyze verify deploy/systemd/*` reports no errors.
-- [ ] `systemctl list-timers 'clips-*'` shows all 8 timers with next run times.
+- [ ] `systemctl list-timers 'clips-*'` shows all 9 timers with next run times.
 - [ ] `journalctl -u 'clips@*' --since today` shows runs of each command.
 - [ ] Reboot the server: AdsPower, the bot and all timers come back without manual steps.
 
@@ -1823,13 +1944,13 @@ def test_decide():
 **Files:** create `docs/RUNBOOK.md`.
 
 **Content (keep it short, one section each):**
-1. Add a new account: create the AdsPower profile with its proxy, log in to Instagram by hand, add `[[accounts]]` to `config.toml`, put the background image, `python -m clips sync-accounts`, `python -m clips health --account X`.
+1. Add a new account: create the AdsPower profile with its proxy, log in to Instagram by hand, switch the account to a professional (creator) account, add `[[accounts]]` to `config.toml` (with `caption_lang`), put the background image, `python -m clips sync-accounts`, `python -m clips health --account X`, `python -m clips set-bio --account X`.
 2. Account went to "проверка": what to do in AdsPower, then press "Проверку прошёл".
 3. Change banners (e.g. new Playerok campaign): replace files, update `[banners]`, run `build` + `validate` on a sample, check on a phone.
 4. Instagram UI changed (publish fails with `LookupError`): open the latest screenshot + HTML in `data/screenshots/`, fix `clips/ig_selectors.py`, run `publish-file --dry-run`.
 5. Logs: `journalctl -u clips@publish -n 200`, `journalctl -u clips-bot -f`.
 6. Restore a backup: stop timers and bot, copy the backup over `data/clips.db`, start again.
-6a. Refill the Japanese caption pool (daily summary shows ⚠️): append new captions to `assets/captions_ja.txt`, one block per caption, an empty line between blocks, neutral topics only. No restart needed: the planner reads the file on every run.
+6a. Caption pool runs low (daily summary shows ⚠️): add more popular accounts to `captions.donors_<lang>` and run `python -m clips harvest-captions` now instead of waiting for Sunday.
 7. The `apify.views_field` decision from Task 4.1.
 8. Monthly: `.venv/bin/pip install -U yt-dlp` (Instagram breaks old versions).
 
@@ -1841,9 +1962,10 @@ def test_decide():
 **Why:** spec: scale to 20 accounts only after a pilot.
 
 **Steps:**
-1. Week 1: 3 accounts, `daily_limit = 1`. Watch every alert. Fix selectors and thresholds.
+1. Week 1: 3 accounts, `daily_limit = 1`. Watch every alert. Fix selectors and thresholds. Split caption languages from day one: at least 2 accounts `japanese` and 2 `russian` once there are 4+ accounts (the 5th may be either, or `none`). Use the same donors for both groups so only the language differs.
 2. Weeks 2-4: up to 5 accounts, `daily_limit = 2`. Weekly: read the report, tune `trends.views_to_median_ratio`, `min_views`, donors list, `filter.blocked_patterns`.
-3. Track per week (from the weekly report): reels posted, % reaching 50k, approved RUB, rejection reasons, account incidents (checks, blocks, bans), Apify spend. Also watch the effect of Japanese captions: if reels get unusually few views, or Playerok rejects them over audience or caption, tell the owner (switching back to Russian captions is only a change of the pool file).
+3. Track per week (from the weekly report): reels posted, % reaching 50k, approved RUB, rejection reasons, account incidents (checks, blocks, bans), Apify spend. Per caption language: median views per reel, % reaching 50k, average Russian audience share from `/geo` (record it for every reel with 50k+ views), Playerok rejections that mention geography or audience.
+3a. Proposed language decision after the pilot (owner decides): keep `japanese` only if its median views are not lower than `russian`, its Russian audience share is at most 10 points lower, and Playerok rejected no Japanese-caption reel over geography. Otherwise switch every account to `russian` (config only). With 4-5 accounts the result is a hint, not proof.
 4. Proposed go/no-go for scaling (owner decides): no bans caused by the pipeline in the last 2 weeks; at least one approved payout per active account; Playerok rejection rate under 20%; zero double posts; zero reels published without a valid banner.
 5. Scale in steps of +3 to 5 accounts per week, not all at once.
 
@@ -1868,7 +1990,7 @@ def test_decide():
 | 1 | Playerok banner files: the top sticker (transparent PNG, as in the competitor reels) and the voiced banner (format, transparency, where on screen it plays: over the circle, full screen?) | Task 1.2, 1.3 | PNG sticker on top; voiced MP4 drawn below the top banner at full width |
 | 2 | Do Playerok's midroll timing rules ("shorter than 20 s", "at second 10-20") refer to the source length or the final reel length? | Task 1.3 | Source length; default insert at second 10 satisfies both readings for sources 13 s and longer |
 | 3 | Banner position below Instagram's header | Task 1.2 | Resolved from competitor reels (section 1.1): centered, `top_y = 280`, `top_height_px = 360` |
-| 4 | Background image and overlay texts for every account; the Japanese caption pool file (enough for at least 60 days: posts per day x 60) | Tasks 2.1, 3.5 | none, required |
+| 4 | Background image, overlay texts and `caption_lang` for every account | Task 2.1 | none, required |
 | 5 | Donor list (Instagram usernames) | Task 3.2 | none, required |
 | 6 | AdsPower: plan with Local API, API key, profiles with proxies, Instagram logged in, profile ids; UI language of Instagram in the profiles (selectors cover EN and RU) | Task 2.2 | none, required |
 | 7 | Tokens: Apify, Telegram bot + operator user ids, Notion integration + parent page id | Tasks 3.1, 4.3, 5.1 | none, required |
@@ -1877,7 +1999,9 @@ def test_decide():
 | 10 | Downloads of donor videos (Apify CDN links, yt-dlp fallback) are anonymous and go from the server IP, not tied to any account. Acceptable, or route them through `download.proxy`? | Task 3.4 | server IP, no cookies |
 | 11 | Off-server backup destination, if wanted | Task 5.3 | local backups only |
 | 12 | A competitor reel posted on 15.11.2026 uses the plain Playerok logo, not the GTA VI banner. Is the plain logo still paid in November, or only GTA VI? | Task 1.2 | GTA VI banner only |
-| 13 | Caption style | Task 3.5 | Resolved 16.11.2026: Japanese captions from a shared pool, never repeated |
+| 13 | Caption style | Task 3.5 | Resolved (addendum 1a): language per account, Japanese vs Russian compared in the pilot |
+| 14 | Caption donors: popular Japanese accounts (cinema, anime, travel, fashion) and popular Russian accounts for the Russian group; extra brand words to strip | Task 3.5 | none, required |
+| 15 | Are all accounts professional (creator) accounts? Needed to see audience countries (`/geo`) and for Playerok's 500k+ stats recording | Task 3.5 | operator switches them during onboarding |
 
 ---
 
@@ -1892,9 +2016,9 @@ def test_decide():
 | 5 Dedup | 3.4 |
 | 6 Download | 3.4 |
 | 7 Video build | 1.1, 1.2, 1.3, 1.4, 1.6 |
-| 8 Build validation | 1.5, 3.6 |
-| 9 Queue | 3.5 |
-| 10 Publishing | 2.2, 2.4, 3.6 |
+| 8 Build validation | 1.5, 3.7 |
+| 9 Queue | 3.6 |
+| 10 Publishing | 2.2, 2.4, 3.7 |
 | 11 Account health | 2.3, 2.4 |
 | 12 Stats | 4.1 |
 | 13 Submit logic | 4.2 |
@@ -1904,3 +2028,4 @@ def test_decide():
 | 17 Maintenance | 5.3, 6.1 (journald) |
 | Principles: schedule, config, .env, dry-run, logs, screenshots, idempotency, never delete posts | 0.1-0.4, 2.2, 2.4, 6.1, hard rules H1-H9 |
 | Development order and pilot | Phases 1-6, Task 6.3 |
+| Addendum 1a: Japanese captions and bios, per-account language, pilot comparison | 3.5, 3.6, 4.4, 5.2, 6.3, H10 |
