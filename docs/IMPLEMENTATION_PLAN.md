@@ -96,7 +96,7 @@ The owner shared phone screenshots of two working Playerok reels by other accoun
 | Circle border | thin white ring, ~2 px | thin light ring | `circle_border_px = 3`, white |
 | Banner vs circle | ~85 px gap | touching, no overlap | gap >= 0 enforced by config validation |
 | Audio label | "Original audio" | "Original audio" | audio embedded in the file |
-| Caption | Japanese text unrelated to the video | Japanese text + Japanese hashtags, unrelated | per-account `captions` (owner decides the style) |
+| Caption | Japanese text unrelated to the video | Japanese text + Japanese hashtags, unrelated | Japanese, from a shared pool, never repeated (owner decision, 16.11.2026; Task 3.5) |
 
 What this changes compared with a naive reading of the spec:
 - The banner is a centered sticker below Instagram's own top overlay (the "Reels"/"Posts" header and author line cover roughly the top 0-280 px on a phone), not a full-width strip at y = 0.
@@ -104,6 +104,7 @@ What this changes compared with a naive reading of the spec:
 - The source video inside the circle looks soft in both examples: a center square crop of a 720p vertical video is upscaled about 1.3x. Expected, not a bug. Burned-in subtitles of the source stay visible near the bottom of the circle.
 - Example 1 was posted on 15.11.2026 with the plain Playerok logo, while the spec says the GTA VI banner is mandatory in November. Do not copy it until the owner confirms the plain logo is still paid (Owner inputs, item 12).
 - The midroll cannot be seen on a still screenshot. Its placement is still an open question (Owner inputs, item 1).
+- Captions: the owner decided to copy the Japanese style. Captions come from one shared pool file (`captions.file`), each caption is used once across the whole network (no reuse for `captions.reuse_after_days`). Unique captions also make reel URL capture and stats matching reliable. Why competitors do it is unknown. Possible side effect: Instagram may show the reels to a Japanese-speaking audience; whether that hurts views or Playerok approval is unknown, so watch it in the pilot (Task 6.3).
 
 ---
 
@@ -185,6 +186,7 @@ data/locks/            flock files
 data/tmp/              temp files for ffmpeg
 assets/backgrounds/    one image per account (owner provides)
 assets/banners/        Playerok banner files (owner provides)
+assets/captions_ja.txt Japanese caption pool (owner provides)
 ```
 
 ### 2.3 Conventions
@@ -507,6 +509,9 @@ active --disabled--> banned (terminal; operator can override with CLI)
      '\bхач(и|ик|ей|ам)?\b', '\bчурк', '\bнигг', '\bжид(ы|ов|овск\w*)?\b', '\bхохл', '\bкацап', '\bмоскал',
      # religion
      '\bбог\b', '\bаллах', '\bиисус', '\bхрист', '\bцерк', '\bмечет', '\bислам', '\bправослав', '\bмусульм', '\bрелиги', '\bмолитв',
+     # Japanese (for our own caption pool; plain substrings, Japanese has no word boundaries)
+     '政治', '選挙', '首相', '大統領', '戦争', '軍隊', '兵器', '犯罪', '殺人', '暴力', 'ヤクザ', '暴力団',
+     '麻薬', '大麻', 'ドラッグ', '差別', '宗教', '神社', '寺院', '教会', '祈り',
    ]
 
    [dedup]
@@ -557,20 +562,25 @@ active --disabled--> banned (terminal; operator can override with CLI)
    keep_backups = 14
    min_free_disk_gb = 10
 
+   [captions]
+   file = "assets/captions_ja.txt"         # Japanese captions, one per block, blocks separated by an empty line
+   reuse_after_days = 60                   # a caption is not used again anywhere in the network for N days
+   low_pool_alert = 30                     # daily summary warns when fewer free captions remain
+
    [[accounts]]
    nick = "example_account"
    adspower_id = "jabc123"                 # AdsPower profile user_id
    background = "assets/backgrounds/example_account.jpg"
    daily_limit = 1
-   captions = ["Подпись 1 #мемы", "Подпись 2 #юмор"]
-   overlay_texts = ["Смотри до конца"]
+   overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)
    ```
 3. `clips/config.py`:
    - `ROOT = Path(__file__).resolve().parent.parent`.
    - `load_env(path)`: tiny `.env` parser (skip blank and `#` lines, split on first `=`, strip quotes, `os.environ.setdefault`). No python-dotenv.
-   - `load(path=None) -> dict`: `load_env(ROOT/".env")`, read `CLIPS_CONFIG` env var or `ROOT/"config.toml"` with `tomllib`, resolve relative paths (`data_dir`, `banners.top`, `banners.midroll`, each `accounts[].background`) against `ROOT`, create data subfolders (`raw sources build screenshots backups locks tmp`), call `validate(cfg)`, return dict. Add `cfg["data"] = Path(...)` for convenience.
+   - `load(path=None) -> dict`: `load_env(ROOT/".env")`, read `CLIPS_CONFIG` env var or `ROOT/"config.toml"` with `tomllib`, resolve relative paths (`data_dir`, `banners.top`, `banners.midroll`, `captions.file`, each `accounts[].background`) against `ROOT`, create data subfolders (`raw sources build screenshots backups locks tmp`), call `validate(cfg)`, return dict. Add `cfg["data"] = Path(...)` for convenience.
    - `validate(cfg)`: collect ALL problems into a list, then `raise SystemExit("config errors:\n- ...")` if any. Checks:
-     - nicks unique; each account has non-empty `adspower_id`, non-empty `captions`, existing `background` file.
+     - nicks unique; each account has non-empty `adspower_id` and an existing `background` file.
+     - `captions.file` exists (its content is checked by `planner.load_captions`, Task 3.5; do not import planner here, that would be a circular import).
      - `1 <= daily_limit <= 3` (H6: hard cap 3 regardless of anything).
      - `banners.top` exists; if `banners.midroll` is non-empty it exists.
      - `banners.top_min_height_px >= ceil(compose.height / 6)` and `banners.top_height_px >= banners.top_min_height_px`.
@@ -873,13 +883,13 @@ Prerequisites (owner): AdsPower Linux client installed on the server with Local 
 
 ### Task 2.1: Accounts in config and DB (spec module 1)
 
-**Why:** each account looks different (background, captions) and the pipeline must know where it may post.
+**Why:** each account looks different (background) and the pipeline must know where it may post. Captions are not per account: they come from the shared Japanese pool (Task 3.5).
 
 **Files:** create `run_sync_accounts` in `clips/db.py` (it is 15 lines, no new module); wire `sync-accounts` and `account-status` in `__main__.py`.
 
 **Steps:**
 
-1. Static fields (nick, adspower_id, background, captions, overlay_texts, daily_limit) live ONLY in config. Runtime fields (status, followers, ...) live ONLY in the DB. No duplication.
+1. Static fields (nick, adspower_id, background, overlay_texts, daily_limit) live ONLY in config. Runtime fields (status, followers, ...) live ONLY in the DB. No duplication.
 2. `sync_accounts(con, cfg)`: `INSERT OR IGNORE INTO accounts(nick, status, updated_at) VALUES (?, 'active', now)` for each config account. Log a WARNING for DB accounts missing from config (never delete them; their history matters). Call it at the start of `plan`, `publish`, `stats` (cheap, keeps things in sync).
 3. `account-status NICK STATUS [--reason]`: validate STATUS in the 4 allowed values, call `set_account_status`.
 4. Helper `account_cfg(cfg, nick) -> dict` (raise `KeyError` with a clear message).
@@ -1088,11 +1098,11 @@ def test_classify():
    5. If `REELS_NOTICE_OK` appears within 5 s, click it.
    6. If `CROP_BUTTON` exists: click it, click `CROP_ORIGINAL` (our file is already 9:16).
    7. Click `NEXT` (crop step), pause, click `NEXT` (edit step).
-   8. Click `CAPTION`, type the caption with `page.keyboard.type(caption, delay=random.randint(*typing_delay_ms))`.
+   8. Click `CAPTION`, type the caption with `page.keyboard.type(caption, delay=random.randint(*typing_delay_ms))`. Captions are Japanese: `keyboard.type` inserts any Unicode text (Japanese, emoji) directly, no IME needed, and `\n` becomes an Enter press. In the dry-run screenshot check that the Japanese text and its line breaks look exactly like the pool entry.
    9. **Dry-run stops here**: screenshot `before_share`, close the dialog with `Escape` (confirm "Discard" / "Отменить" if asked), return.
    10. Record `share_clicked_at = now` in the DB BEFORE clicking (if the process dies after the click we still know a post may exist). Click `SHARE`.
    11. Wait for `SHARED_OK` up to `upload_timeout_sec`. While waiting, every 10 s run `classify_health` on the page text: `action_block` -> raise `HealthProblem("action_block")`.
-4. `find_reel(page, nick, caption, known: set[str]) -> str | None`: `goto https://www.instagram.com/{nick}/reels/`, wait for `REEL_LINK`, take the first 6 hrefs, extract shortcodes with `re.search(r"/reel/([\w-]+)", href)`, drop ones in `known` (all `ig_shortcode` values in the DB), then for each remaining: `goto` the reel page and check that the page text contains `caption[:30]`; return the first match. Retry the whole thing 3 times with 20 s waits (Instagram may need time to process). Returns None if not found. Pinned reels are why we check the caption instead of taking the first link.
+4. `find_reel(page, nick, caption, known: set[str]) -> str | None`: `goto https://www.instagram.com/{nick}/reels/`, wait for `REEL_LINK`, take the first 6 hrefs, extract shortcodes with `re.search(r"/reel/([\w-]+)", href)`, drop ones in `known` (all `ig_shortcode` values in the DB), then for each remaining: `goto` the reel page and check that the page text contains `caption[:30]`, comparing both after collapsing whitespace (`" ".join(s.split())`, because line breaks render differently); return the first match. Retry the whole thing 3 times with 20 s waits (Instagram may need time to process). Returns None if not found. Pinned reels are why we check the caption instead of taking the first link.
 5. `read_followers(page, nick) -> int | None`: `goto https://www.instagram.com/{nick}/`, read `meta[name="description"]` content, parse with the pure function below. Best effort: None on any failure.
    ```python
    MULT = {"k": 1e3, "к": 1e3, "тыс": 1e3, "m": 1e6, "м": 1e6, "млн": 1e6}
@@ -1115,7 +1125,7 @@ def test_classify():
    - `HealthProblem(h)`: `apply_health(...)` with the screenshot; if `share_clicked_at` is set mark `unconfirmed`, else `failed` with error `health:<h>`.
    - `ProfileBusy` / `AdsPowerError`: leave the publication as is (it will be retried next run until `max_delay_hours` passes), log WARNING.
    - Any other exception: screenshot already saved by `session`; if `share_clicked_at` is set mark `unconfirmed`, else `failed` with the error text; alert with the screenshot.
-7. `publish-file --account --file --banner-type static|voiced [--caption]`: refuse if a publication with the same `file_path` and state `published`/`unconfirmed` exists (idempotency). Insert a publication (`source_id NULL`, `state='built'`, `scheduled_at=now`, caption = given or random from the account's captions, `banner_type` from the required flag), then `browser_lock` + `publish_one`.
+7. `publish-file --account --file --banner-type static|voiced [--caption]`: refuse if a publication with the same `file_path` and state `published`/`unconfirmed` exists (idempotency). Insert a publication (`source_id NULL`, `state='built'`, `scheduled_at=now`, caption = given or `planner.pick_caption(...)` from the Japanese pool (Task 3.5; until Phase 3 the `--caption` flag is required), `banner_type` from the required flag), then `browser_lock` + `publish_one`.
 
 **Tests:**
 ```python
@@ -1338,10 +1348,35 @@ def test_dhash_different_videos(media):
    - count of non-failed publications `< 1 + max_reposts`;
    - target account has never posted this source.
    New row: `attempt = max(attempt) + 1`. If the source file was deleted by maintenance, call `download_one` again (yt-dlp fallback handles expired Apify URLs).
-4. `plan(cfg, con, dry)`:
+4. Japanese caption pool (owner decision, section 1.1). Every publication gets a caption no other publication in the network used within `captions.reuse_after_days`:
+   ```python
+   def load_captions(cfg) -> list[str]:
+       """Blocks of text separated by an empty line; blocked topics are dropped (and logged)."""
+       text = Path(cfg["captions"]["file"]).read_text(encoding="utf-8")
+       caps = [c.strip() for c in re.split(r"\n\s*\n", text) if c.strip()]
+       bad = [c[:30] for c in caps if len(c) > 2200 or c.count("#") > 30]   # Instagram limits
+       if bad:
+           raise ValueError(f"captions over Instagram limits: {bad}")
+       pool = [c for c in caps if not trends.blocked_reason(c, "", cfg)]
+       if not pool:
+           raise ValueError("caption pool is empty")
+       return pool
+
+   def pick_caption(con, cfg, pool: list[str], rng, now) -> tuple[str, int]:
+       """Return (caption, free_left). Free = never used, or last used before the reuse window."""
+       since = db.iso(now - timedelta(days=cfg["captions"]["reuse_after_days"]))
+       last = dict(con.execute("SELECT caption, MAX(created_at) FROM publications "
+                               "WHERE caption IS NOT NULL GROUP BY caption").fetchall())
+       free = [c for c in pool if last.get(c, "") < since]
+       if free:
+           return rng.choice(free), len(free) - 1
+       return min(pool, key=lambda c: last[c]), 0   # pool exhausted: least recently used
+   ```
+   The pool file is written by the owner (or generated on request); it lives in `assets/` and is not in git. Keep its topics neutral (food, travel, nature, daily life): Playerok's forbidden topics apply to captions too, and the Japanese entries in `filter.blocked_patterns` drop obvious violations.
+5. `plan(cfg, con, dry)`:
    - `sync_accounts`, `resume_paused_accounts` (+ Telegram "Аккаунт @nick снова активен").
    - Expire stale slots: publications `planned`/`built` with `scheduled_at < now - max_delay_hours` -> `failed`, error `slot_expired`, delete their built file.
-   - For each config account with DB status `active`: `taken` = its publications scheduled today (local day) with state not `failed`; for each of `daily_limit - taken` free slots: pick a source (fresh, else repost for this account), pick a slot (None -> stop for this account), insert the publication (`state='planned'`, `caption` = random from captions but different from the account's previous caption when possible, `created_at`). The `UNIQUE(source_id, attempt)` constraint protects against double planning; catch `sqlite3.IntegrityError` and skip.
+   - For each config account with DB status `active`: `taken` = its publications scheduled today (local day) with state not `failed`; for each of `daily_limit - taken` free slots: pick a source (fresh, else repost for this account), pick a slot (None -> stop for this account), insert the publication (`state='planned'`, `caption` = `pick_caption(...)` with the pool loaded once per run, `created_at`). The `UNIQUE(source_id, attempt)` constraint protects against double planning; catch `sqlite3.IntegrityError` and skip.
    - Build every `planned` publication (including ones from earlier runs): `out = data/build/pub_{id}.mp4`, `video.build(source.file_path, account, cfg, out, text=...)`, store `file_path`, `background`, `banner_type`, `banner_file`, `state='built'`. Build/validation error -> publication `failed`, source `failed` with reason, Telegram alert.
    - Dry-run: print the plan table (account, local time, source shortcode, score, attempt), build nothing.
 
@@ -1363,6 +1398,15 @@ def test_same_source_never_on_two_accounts(con, cfg):
     # 1 ready source, 2 accounts -> exactly 1 publication
 
 def test_paused_account_not_planned(con, cfg): ...
+
+def test_load_captions_splits_blocks_and_drops_blocked(tmp_path, cfg):
+    # file: "夕焼けの海辺で過ごす特別な夜。\n#旅行 #夕日\n\n朝のコーヒーと静かな時間。\n\n\n選挙の話\n\n雨の日の散歩も悪くない。"
+    # -> 3 captions; the first keeps its line break; "選挙の話" is dropped
+
+def test_pick_caption(con, cfg):
+    # pool of 3; caption 0 used yesterday, caption 1 used 90 days ago (reuse_after_days = 60)
+    # 50 picks with random.Random(1) return only captions 1 and 2
+    # after captions 1 and 2 are used 2 and 3 days ago: returns (caption 2, 0), the least recently used
 ```
 (For planner tests, monkeypatch `video.build` to write a dummy file and return a fixed dict.)
 
@@ -1388,7 +1432,7 @@ def test_paused_account_not_planned(con, cfg): ...
 
 **Acceptance criteria (Phase 3 exit):**
 - [ ] `python -m clips trends && python -m clips plan && python -m clips publish --dry-run` run end-to-end on one real account with `daily_limit = 1`.
-- [ ] HUMAN CHECK: let it run for 2 days on one account (timers can be started by hand or with `systemd-run --on-calendar`): exactly `daily_limit` posts per day, inside the window, no duplicates, captions vary.
+- [ ] HUMAN CHECK: let it run for 2 days on one account (timers can be started by hand or with `systemd-run --on-calendar`): exactly `daily_limit` posts per day, inside the window, no duplicates, every caption is Japanese and none repeats.
 
 ---
 
@@ -1406,7 +1450,7 @@ def test_paused_account_not_planned(con, cfg): ...
    - usernames = accounts with status not `banned` that have publications in the last `deadline_days + 1` days.
    - One actor call: `{"username": usernames, "resultsLimit": stats_results_per_account, "onlyPostsNewerThan": f"{deadline_days + 1} days", "skipPinnedPosts": false}` (our own pinned reels need stats too). `dump_raw(cfg, "stats", items)`.
    - Map `shortCode` -> publication (`state='published'`). For each match: `INSERT OR IGNORE INTO view_snapshots(publication_id, taken_at, views, likes)` with `taken_at = now`, and `UPDATE publications SET last_views = ?`.
-   - Resolve `unconfirmed` publications: an item with `ownerUsername == account`, `timestamp >= share_clicked_at - 10 min`, caption starting with the publication caption's first 30 chars, and a shortcode not yet in the DB -> set `state='published'`, `published_at = item timestamp`, `ig_shortcode`, `ig_url`. Unresolved after 48 h -> alert once "Не найден рилс pub#{id} @{nick}, проверьте вручную".
+   - Resolve `unconfirmed` publications: an item with `ownerUsername == account`, `timestamp >= share_clicked_at - 10 min`, caption starting with the publication caption's first 30 chars (compare after collapsing whitespace on both sides), and a shortcode not yet in the DB -> set `state='published'`, `published_at = item timestamp`, `ig_shortcode`, `ig_url`. Unresolved after 48 h -> alert once "Не найден рилс pub#{id} @{nick}, проверьте вручную".
    - Published reels younger than `deadline_days` missing from the results: WARNING log; if `submit_status` is `candidate`/`submit_now`, alert once (the reel may have been removed by Instagram).
 2. HUMAN CHECK (one time, during this task): for 3 of our reels compare the views number in the Instagram app with `videoPlayCount` and `videoViewCount` from the raw dump. Set `apify.views_field` to the one that matches what the app shows (Playerok records what the app shows). Note the result in `docs/RUNBOOK.md`.
 
@@ -1618,6 +1662,7 @@ def test_decide():
   pub#{id} @{acc} {views} просм., подать до {dd.mm}
 Кандидаты: {n} · Поданы, ждут решения: {n}
 Одобрено в этом месяце: {sum} ₽
+Свободных подписей: {n}            (prefix ⚠️ and "пополните файл" when n < captions.low_pool_alert)
 Свободно на диске: {gb} ГБ
 ```
 `summary` command sends it (prints in dry-run).
@@ -1784,6 +1829,7 @@ def test_decide():
 4. Instagram UI changed (publish fails with `LookupError`): open the latest screenshot + HTML in `data/screenshots/`, fix `clips/ig_selectors.py`, run `publish-file --dry-run`.
 5. Logs: `journalctl -u clips@publish -n 200`, `journalctl -u clips-bot -f`.
 6. Restore a backup: stop timers and bot, copy the backup over `data/clips.db`, start again.
+6a. Refill the Japanese caption pool (daily summary shows ⚠️): append new captions to `assets/captions_ja.txt`, one block per caption, an empty line between blocks, neutral topics only. No restart needed: the planner reads the file on every run.
 7. The `apify.views_field` decision from Task 4.1.
 8. Monthly: `.venv/bin/pip install -U yt-dlp` (Instagram breaks old versions).
 
@@ -1797,7 +1843,7 @@ def test_decide():
 **Steps:**
 1. Week 1: 3 accounts, `daily_limit = 1`. Watch every alert. Fix selectors and thresholds.
 2. Weeks 2-4: up to 5 accounts, `daily_limit = 2`. Weekly: read the report, tune `trends.views_to_median_ratio`, `min_views`, donors list, `filter.blocked_patterns`.
-3. Track per week (from the weekly report): reels posted, % reaching 50k, approved RUB, rejection reasons, account incidents (checks, blocks, bans), Apify spend.
+3. Track per week (from the weekly report): reels posted, % reaching 50k, approved RUB, rejection reasons, account incidents (checks, blocks, bans), Apify spend. Also watch the effect of Japanese captions: if reels get unusually few views, or Playerok rejects them over audience or caption, tell the owner (switching back to Russian captions is only a change of the pool file).
 4. Proposed go/no-go for scaling (owner decides): no bans caused by the pipeline in the last 2 weeks; at least one approved payout per active account; Playerok rejection rate under 20%; zero double posts; zero reels published without a valid banner.
 5. Scale in steps of +3 to 5 accounts per week, not all at once.
 
@@ -1822,7 +1868,7 @@ def test_decide():
 | 1 | Playerok banner files: the top sticker (transparent PNG, as in the competitor reels) and the voiced banner (format, transparency, where on screen it plays: over the circle, full screen?) | Task 1.2, 1.3 | PNG sticker on top; voiced MP4 drawn below the top banner at full width |
 | 2 | Do Playerok's midroll timing rules ("shorter than 20 s", "at second 10-20") refer to the source length or the final reel length? | Task 1.3 | Source length; default insert at second 10 satisfies both readings for sources 13 s and longer |
 | 3 | Banner position below Instagram's header | Task 1.2 | Resolved from competitor reels (section 1.1): centered, `top_y = 280`, `top_height_px = 360` |
-| 4 | Background image, captions and overlay texts for every account | Task 2.1 | none, required |
+| 4 | Background image and overlay texts for every account; the Japanese caption pool file (enough for at least 60 days: posts per day x 60) | Tasks 2.1, 3.5 | none, required |
 | 5 | Donor list (Instagram usernames) | Task 3.2 | none, required |
 | 6 | AdsPower: plan with Local API, API key, profiles with proxies, Instagram logged in, profile ids; UI language of Instagram in the profiles (selectors cover EN and RU) | Task 2.2 | none, required |
 | 7 | Tokens: Apify, Telegram bot + operator user ids, Notion integration + parent page id | Tasks 3.1, 4.3, 5.1 | none, required |
@@ -1831,7 +1877,7 @@ def test_decide():
 | 10 | Downloads of donor videos (Apify CDN links, yt-dlp fallback) are anonymous and go from the server IP, not tied to any account. Acceptable, or route them through `download.proxy`? | Task 3.4 | server IP, no cookies |
 | 11 | Off-server backup destination, if wanted | Task 5.3 | local backups only |
 | 12 | A competitor reel posted on 15.11.2026 uses the plain Playerok logo, not the GTA VI banner. Is the plain logo still paid in November, or only GTA VI? | Task 1.2 | GTA VI banner only |
-| 13 | Both competitor reels use Japanese captions unrelated to the video. Do we copy this style? (Captions are per-account config, so no code change either way.) | Task 2.1 | owner writes the caption sets |
+| 13 | Caption style | Task 3.5 | Resolved 16.11.2026: Japanese captions from a shared pool, never repeated |
 
 ---
 
