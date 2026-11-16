@@ -1,5 +1,6 @@
 """SQLite: schema, connection, time helpers. Single source of truth."""
 import sqlite3
+from pathlib import Path
 from datetime import datetime, timezone
 
 SCHEMA = """
@@ -112,7 +113,17 @@ END;
 FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
-def connect(path) -> sqlite3.Connection:
+def connect(path, readonly=False) -> sqlite3.Connection:
+    """Read-only (dry-run) never creates or writes the file: missing DB -> empty in-memory copy."""
+    if readonly:
+        if Path(path).exists():
+            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        else:
+            con = sqlite3.connect(":memory:")
+            con.executescript(SCHEMA)
+        con.row_factory = sqlite3.Row
+        con.execute("PRAGMA busy_timeout=30000")
+        return con
     con = sqlite3.connect(path, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
