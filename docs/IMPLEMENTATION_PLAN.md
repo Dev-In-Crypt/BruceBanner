@@ -106,7 +106,7 @@ What this changes compared with a naive reading of the spec:
 - The source video inside the circle looks soft in both examples: a center square crop of a 720p vertical video is upscaled about 1.3x. Expected, not a bug. Burned-in subtitles of the source stay visible near the bottom of the circle.
 - Example 1 was posted on 15.11.2026 with the plain Playerok logo, while the spec says the GTA VI banner is mandatory in November. Do not copy it until the owner confirms the plain logo is still paid (Owner inputs, item 12).
 - The midroll cannot be seen on a still screenshot. Its placement is still an open question (Owner inputs, item 1).
-- Captions and bios (owner addendum 1a, `docs/spec-ru.md`): the working accounts use Japanese bios and captions copied from popular Japanese posts (for example Disney Japan posts about Toy Story), unrelated to the video. Why it works is unknown, no public explanation was found. We copy the practice and test it in the pilot: some accounts get Japanese captions, some Russian, and we compare reach and audience geography. The reason to compare: Playerok wants a Russian-speaking audience and checks country stats for 500k+ reels; if Japanese captions pull the reels to a Japanese audience, payouts get cut.
+- Captions and bios (owner addendum 1a, `docs/spec-ru.md`): the working accounts use Japanese bios and captions copied from popular Japanese posts (for example Disney Japan posts about Toy Story), unrelated to the video. Why it works is unknown, no public explanation was found. We copy the practice and test it in the pilot: some accounts get Japanese captions, some get none (control group; the owner decided not to use Russian caption donors), and we compare reach and audience geography. The reason to compare: Playerok wants a Russian-speaking audience and checks country stats for 500k+ reels; if Japanese captions pull the reels to a Japanese audience, payouts get cut.
 
 ---
 
@@ -587,9 +587,16 @@ active --disabled--> banned (terminal; operator can override with CLI)
    min_free_disk_gb = 10
 
    [captions]
-   # Popular accounts whose post captions we copy (cinema, anime, travel, fashion...). Replace the examples.
-   donors_japanese = ["jp_movies_example", "jp_anime_example", "jp_travel_example", "jp_fashion_example"]
-   donors_russian = ["ru_lifestyle_example"]
+   # Popular accounts whose post captions we copy. Approved by the owner 16.11.2026 (existence checked on
+   # HypeAuditor / Social Blade / official sites; first Apify run confirms they are active and Japanese).
+   donors_japanese = [
+     "disneyjp", "netflixjp", "tokyodisneyresort_official",   # cinema, entertainment
+     "voguejapan", "vivi_mag_official",                       # fashion
+     "visitjapanjp",                                          # travel
+     "kurashiru", "delishkitchen.tv",                         # food
+     # unverified, add after a manual check: "nationalpark_japan", "nihonryokan", "elle_japan"; anime: none found yet
+   ]
+   donors_russian = []                     # owner decision: no Russian caption donors, so no account may use "russian"
    results_per_donor = 30
    fresh_days = 60
    min_likes = 1000                        # only popular posts; hidden likes (-1) count as passing
@@ -1364,7 +1371,7 @@ def test_dhash_different_videos(media):
 
 ### Task 3.5: Caption pool and profile bios (owner addendum 1a)
 
-**Why:** the working competitor accounts use Japanese bios and captions copied from popular Japanese posts, unrelated to the video (section 1.1). Why it works is unknown, so we copy it and test it in the pilot against Russian captions (Task 6.3). Every caption is used once in the whole network, so our accounts are never linked to each other by identical text. The language is set per account because Playerok wants a Russian-speaking audience and checks country stats for 500k+ reels.
+**Why:** the working competitor accounts use Japanese bios and captions copied from popular Japanese posts, unrelated to the video (section 1.1). Why it works is unknown, so we copy it and test it in the pilot against accounts without captions (Task 6.3). Every caption is used once in the whole network, so our accounts are never linked to each other by identical text. The language is set per account because Playerok wants a Russian-speaking audience and checks country stats for 500k+ reels.
 
 **Files:** create `clips/captions.py`, `tests/test_captions.py`; add bio selectors to `clips/ig_selectors.py`; add `set_bio` to `clips/instagram.py`.
 
@@ -1962,10 +1969,10 @@ def test_decide():
 **Why:** spec: scale to 20 accounts only after a pilot.
 
 **Steps:**
-1. Week 1: 3 accounts, `daily_limit = 1`. Watch every alert. Fix selectors and thresholds. Split caption languages from day one: at least 2 accounts `japanese` and 2 `russian` once there are 4+ accounts (the 5th may be either, or `none`). Use the same donors for both groups so only the language differs.
+1. Week 1: 3 accounts, `daily_limit = 1`. Watch every alert. Fix selectors and thresholds. Split caption languages from day one: at least 2 accounts `japanese` and 2 `none` (no caption, the control group; owner decided not to use Russian caption donors) once there are 4+ accounts. Use the same video donors for both groups so only the caption differs.
 2. Weeks 2-4: up to 5 accounts, `daily_limit = 2`. Weekly: read the report, tune `trends.views_to_median_ratio`, `min_views`, donors list, `filter.blocked_patterns`.
 3. Track per week (from the weekly report): reels posted, % reaching 50k, approved RUB, rejection reasons, account incidents (checks, blocks, bans), Apify spend. Per caption language: median views per reel, % reaching 50k, average Russian audience share from `/geo` (record it for every reel with 50k+ views), Playerok rejections that mention geography or audience.
-3a. Proposed language decision after the pilot (owner decides): keep `japanese` only if its median views are not lower than `russian`, its Russian audience share is at most 10 points lower, and Playerok rejected no Japanese-caption reel over geography. Otherwise switch every account to `russian` (config only). With 4-5 accounts the result is a hint, not proof.
+3a. Proposed decision after the pilot (owner decides): keep `japanese` only if its median views are not lower than `none`, its Russian audience share is at most 10 points lower, and Playerok rejected no Japanese-caption reel over geography. Otherwise switch every account to `none` (config only). With 4-5 accounts the result is a hint, not proof.
 4. Proposed go/no-go for scaling (owner decides): no bans caused by the pipeline in the last 2 weeks; at least one approved payout per active account; Playerok rejection rate under 20%; zero double posts; zero reels published without a valid banner.
 5. Scale in steps of +3 to 5 accounts per week, not all at once.
 
@@ -1999,8 +2006,8 @@ def test_decide():
 | 10 | Downloads of donor videos (Apify CDN links, yt-dlp fallback) are anonymous and go from the server IP, not tied to any account. Acceptable, or route them through `download.proxy`? | Task 3.4 | server IP, no cookies |
 | 11 | Off-server backup destination, if wanted | Task 5.3 | local backups only |
 | 12 | A competitor reel posted on 15.11.2026 uses the plain Playerok logo, not the GTA VI banner. Is the plain logo still paid in November, or only GTA VI? | Task 1.2 | GTA VI banner only |
-| 13 | Caption style | Task 3.5 | Resolved (addendum 1a): language per account, Japanese vs Russian compared in the pilot |
-| 14 | Caption donors: popular Japanese accounts (cinema, anime, travel, fashion) and popular Russian accounts for the Russian group; extra brand words to strip | Task 3.5 | none, required |
+| 13 | Caption style | Task 3.5 | Resolved (addendum 1a): language per account; Japanese vs no caption compared in the pilot (no Russian donors) |
+| 14 | Caption donors | Task 3.5 | Resolved 16.11.2026: 8 Japanese accounts in `captions.donors_japanese`; no Russian donors; anime donor still missing |
 | 15 | Are all accounts professional (creator) accounts? Needed to see audience countries (`/geo`) and for Playerok's 500k+ stats recording | Task 3.5 | operator switches them during onboarding |
 
 ---
