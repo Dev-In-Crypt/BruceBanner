@@ -594,7 +594,8 @@ active --disabled--> banned (terminal; operator can override with CLI)
      "voguejapan", "vivi_mag_official",                       # fashion
      "visitjapanjp",                                          # travel
      "kurashiru", "delishkitchen.tv",                         # food
-     # unverified, add after a manual check: "nationalpark_japan", "nihonryokan", "elle_japan"; anime: none found yet
+     "onepiece_staff",                                        # anime (ONE PIECE staff account)
+     # unverified, add after a manual check: "nationalpark_japan", "nihonryokan", "elle_japan"
    ]
    donors_russian = []                     # owner decision: no Russian caption donors, so no account may use "russian"
    results_per_donor = 30
@@ -2007,7 +2008,7 @@ def test_decide():
 | 11 | Off-server backup destination, if wanted | Task 5.3 | local backups only |
 | 12 | A competitor reel posted on 15.11.2026 uses the plain Playerok logo, not the GTA VI banner. Is the plain logo still paid in November, or only GTA VI? | Task 1.2 | GTA VI banner only |
 | 13 | Caption style | Task 3.5 | Resolved (addendum 1a): language per account; Japanese vs no caption compared in the pilot (no Russian donors) |
-| 14 | Caption donors | Task 3.5 | Resolved 16.11.2026: 8 Japanese accounts in `captions.donors_japanese`; no Russian donors; anime donor still missing |
+| 14 | Caption donors | Task 3.5 | Resolved 16.11.2026: 9 Japanese accounts in `captions.donors_japanese` (incl. anime: `onepiece_staff`); no Russian donors |
 | 15 | Are all accounts professional (creator) accounts? Needed to see audience countries (`/geo`) and for Playerok's 500k+ stats recording | Task 3.5 | operator switches them during onboarding |
 
 ---
