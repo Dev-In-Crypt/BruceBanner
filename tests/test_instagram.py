@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import threading
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -125,7 +126,7 @@ def chrome_ws(tmp_path):
 @pytest.fixture
 def fake_ig(cfg, con, monkeypatch, chrome_ws, media):
     """AdsPower returns our local Chromium; instagram.com is answered by a fake site."""
-    site = {"shared": None, "home_text": ""}
+    site = {"shared": None, "home_text": "", "bio": "old bio"}
     monkeypatch.setattr(adspower, "start", lambda c, pid: chrome_ws)
     monkeypatch.setattr(adspower, "stop", lambda c, pid: None)
 
@@ -144,6 +145,13 @@ def fake_ig(cfg, con, monkeypatch, chrome_ws, media):
             html = "<html><body>old pinned reel caption</body></html>"
         elif path == "/reel/NEW123/":
             html = f"<html><body>{site['shared']}</body></html>"
+        elif path == "/accounts/edit/":
+            html = ('<html><body><svg aria-label="Home"></svg><textarea id="pepBio">%s</textarea>'
+                    '<div role="button" onclick="fetch(\'/__bio\', {method:\'POST\', body: '
+                    'document.getElementById(\'pepBio\').value})">Submit</div></body></html>') % site["bio"]
+        elif path == "/__bio":
+            site["bio"] = req.post_data
+            return route.fulfill(status=200, body="ok")
         elif path == "/acc1/":
             html = '<html><head><meta name="description" content="1,234 Followers, 5 Following"></head></html>'
         route.fulfill(status=200 if html else 404, content_type="text/html; charset=utf-8", body=html or "nf")
@@ -197,6 +205,30 @@ def test_action_block_pauses_account(cfg, con, fake_ig):
     assert instagram.publish_one(cfg, con, {"id": 99, "file_path": str(built), "caption": "x"}, account) == "skipped"
 
 
+def test_publish_job_publishes_due_and_respects_gap(cfg, con, fake_ig):
+    site, account, built = fake_ig
+    cfg["accounts"] = [account]
+    past = db.iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+    con.execute("INSERT INTO publications (account, state, scheduled_at, file_path, caption, created_at) "
+                "VALUES ('acc1', 'built', ?, ?, '朝の散歩、気持ちいい。', ?)", (past, str(built), past))
+    con.execute("INSERT INTO publications (account, state, scheduled_at, file_path, caption, created_at) "
+                "VALUES ('acc1', 'built', ?, ?, '二本目', ?)", (past, str(built), past))
+    con.commit()
+    res = instagram.run_publish(cfg, con, dry=False)
+    assert res == [(1, "published")]                     # 2nd one waits: min gap between posts of one account
+    assert con.execute("SELECT state FROM publications WHERE id = 2").fetchone()[0] == "built"
+
+
+def test_set_bio_reserves_and_saves(cfg, con, fake_ig):
+    site, account, built = fake_ig
+    con.execute("INSERT INTO captions (lang, text, fetched_at) VALUES ('japanese', '海辺の朝、静かな時間。 #旅行', 'x')")
+    con.commit()
+    assert instagram.run_set_bio(cfg, con, account, force=False, dry=False) == "海辺の朝、静かな時間。"
+    assert site["bio"] == "海辺の朝、静かな時間。"
+    assert con.execute("SELECT used_for FROM captions").fetchone()[0] == "bio:acc1"
+    assert con.execute("SELECT bio_set_at FROM accounts WHERE nick='acc1'").fetchone()[0]
+    with pytest.raises(SystemExit, match="already set"):
+        instagram.run_set_bio(cfg, con, account, force=False, dry=False)
 def test_missing_file_marks_failed(cfg, con):
     account = {**cfg["accounts"][0], "nick": "acc1"}
     db.sync_accounts(con, {"accounts": [account]})

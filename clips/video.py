@@ -246,3 +246,25 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
     return {"duration": round(final, 3), "midroll_at": t, "midroll_dur": round(m, 3),
             "banner_type": "voiced" if t is not None else "static",
             "banner_file": Path(b["top"]).name, "background": Path(account["background"]).name}
+
+
+# ---------- perceptual hash for dedup (module 5) ----------
+
+def dhash(img) -> int:
+    """64-bit difference hash: robust to re-encoding and resizing."""
+    g = img.convert("L").resize((9, 8), Image.LANCZOS)
+    px = g.tobytes()  # one byte per pixel in mode "L"
+    bits = 0
+    for row in range(8):
+        for col in range(8):
+            bits = (bits << 1) | (px[row * 9 + col] > px[row * 9 + col + 1])
+    return bits
+
+
+def video_hashes(path, n) -> list[int]:
+    d = probe(path)["duration"]
+    return [dhash(grab_frame(path, d * (i + 1) / (n + 1))) for i in range(n)]
+
+
+def hash_distance(a: list[int], b: list[int]) -> float:
+    return sum((x ^ y).bit_count() for x, y in zip(a, b)) / max(len(a), 1)

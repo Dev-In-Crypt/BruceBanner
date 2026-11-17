@@ -34,3 +34,9 @@ SHARED_OK = ['text=/reel has been shared/i', 'text=/post has been shared/i',
              'text=/опубликован/i', 'text=/поделились/i']
 CANCEL_POST = ['div[role="dialog"] button:has-text("Discard")', 'div[role="dialog"] button:has-text("Отменить")']
 REEL_LINK = 'a[href*="/reel/"]'
+
+# ---- profile edit (bio) ----
+BIO_TEXTAREA = ['textarea#pepBio', 'textarea[name="biography"]',
+                'textarea[aria-label="Bio"]', 'textarea[aria-label="О себе"]']
+BIO_SUBMIT = ['div[role="button"]:text-is("Submit")', 'div[role="button"]:text-is("Отправить")',
+              'button:text-is("Submit")', 'button:text-is("Отправить")']

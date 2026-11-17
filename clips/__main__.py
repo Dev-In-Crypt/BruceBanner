@@ -10,8 +10,6 @@ log = logging.getLogger("clips")
 
 # command -> phase in which it gets implemented (docs/IMPLEMENTATION_PLAN.md, section 2.6)
 LATER = {
-    "fetch-trends": 3, "select": 3, "download": 3, "trends": 3, "harvest-captions": 3, "set-bio": 3,
-    "plan": 3, "publish": 3,
     "stats": 4, "submit-check": 4, "bot": 4, "summary": 4,
     "notion-setup": 5, "notion-sync": 5, "report": 5, "maintenance": 5,
 }
@@ -52,6 +50,17 @@ def parser() -> argparse.ArgumentParser:
     f.add_argument("--file", required=True)
     f.add_argument("--banner-type", required=True, choices=["static", "voiced"])
     f.add_argument("--caption")
+    for name, hlp in (("fetch-trends", "Apify reels of donors -> sources"), ("trends", "fetch + select + download"),
+                      ("harvest-captions", "collect captions from popular accounts")):
+        t = sub.add_parser(name, parents=[common], help=hlp)
+        t.add_argument("--from-file", help="use a saved Apify JSON dump instead of calling Apify")
+    sub.add_parser("select", parents=[common], help="pick sources worth posting (+ topic filter)")
+    sub.add_parser("download", parents=[common], help="download selected sources + dedup")
+    sb = sub.add_parser("set-bio", parents=[common], help="set the profile bio from the caption pool")
+    sb.add_argument("--account", required=True)
+    sb.add_argument("--force", action="store_true")
+    sub.add_parser("plan", parents=[common], help="plan today's slots, build and validate them")
+    sub.add_parser("publish", parents=[common], help="publish due built publications")
     for name, phase in LATER.items():
         sub.add_parser(name, parents=[common], help=f"(phase {phase})")
     return p
@@ -65,7 +74,7 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_command(args, cfg, con) -> int:
-    from clips import instagram, video
+    from clips import captions, instagram, planner, trends, video
     dry = args.dry_run
     if args.command in ("sync-accounts", "account-status", "health", "publish-file") and not dry:
         db.sync_accounts(con, cfg)
@@ -95,6 +104,24 @@ def run_command(args, cfg, con) -> int:
         state = instagram.run_publish_file(cfg, con, account_cfg(cfg, args.account), args.file,
                                            args.banner_type, args.caption, dry)
         return 0 if state in ("published", "built") else 1
+    elif args.command == "fetch-trends":
+        trends.fetch(cfg, con, dry, args.from_file)
+    elif args.command == "select":
+        trends.select(cfg, con, dry)
+    elif args.command == "download":
+        trends.download(cfg, con, dry)
+    elif args.command == "trends":
+        trends.fetch(cfg, con, dry, args.from_file)
+        trends.select(cfg, con, dry)
+        trends.download(cfg, con, dry)
+    elif args.command == "harvest-captions":
+        captions.harvest(cfg, con, dry, args.from_file)
+    elif args.command == "set-bio":
+        instagram.run_set_bio(cfg, con, account_cfg(cfg, args.account), args.force, dry)
+    elif args.command == "plan":
+        planner.plan(cfg, con, dry)
+    elif args.command == "publish":
+        instagram.run_publish(cfg, con, dry)
     else:
         print(f"not implemented yet (phase {LATER[args.command]})")
         return 2

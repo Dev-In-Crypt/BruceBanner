@@ -1,0 +1,92 @@
+import json
+import shutil
+import subprocess
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from clips import db, trends, video
+
+NOW = datetime.now(timezone.utc)
+
+
+def item(code, donor="donor_a", views=100_000, hours_ago=100, duration=20.0, caption="смешной мем"):
+    return {"shortCode": code, "ownerUsername": donor, "videoUrl": f"https://cdn.example/{code}.mp4",
+            "caption": caption, "videoPlayCount": views, "likesCount": 10, "videoDuration": duration,
+            "timestamp": (NOW - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")}
+
+
+def test_fetch_from_file_is_idempotent(cfg, con, tmp_path):
+    f = tmp_path / "dump.json"
+    f.write_text(json.dumps([item("A1"), item("A2"), item("A3")]))
+    trends.fetch(cfg, con, False, f)
+    f.write_text(json.dumps([item("A1", views=999), item("A2"), item("A3")]))
+    trends.fetch(cfg, con, False, f)
+    assert con.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 3
+    assert con.execute("SELECT views FROM sources WHERE shortcode='A1'").fetchone()[0] == 999
+
+
+def test_blocked(cfg):
+    b = lambda c, d="d": trends.blocked_reason(c, d, cfg)  # noqa: E731
+    assert b("Лучший мем #юмор") is None
+    assert b("Это ВОЙНА мемов")
+    assert b("Хачапури по-аджарски") is None      # no false positive
+    assert b("жидкость для линз") is None         # no false positive
+    assert b("ну ты и сука")
+    cfg["trends"]["blocked_donors"] = ["BadDonor"]
+    assert b("ok", "baddonor") == "blocked_donor"
+
+
+def test_decide(cfg):
+    t = cfg["trends"]
+    assert trends.decide(500_000, 10, 20, 100_000, t) == ("selected", None)
+    assert trends.decide(150_000, 10, 20, 100_000, t)[0] == "new"         # below 2x median
+    assert trends.decide(500_000, 50, 20, 100_000, t) == ("rejected", "too_old")
+    assert trends.decide(500_000, 10, 200, 100_000, t) == ("rejected", "duration")
+    assert trends.decide(500_000, 10, 20, None, t) == ("new", "wait:no_baseline")
+    assert trends.decide(90_000, 10, 20, 10_000, t)[0] == "new"           # below absolute min_views
+
+
+def test_select_flow(cfg, con, tmp_path):
+    history = [item(f"H{i}", views=100_000 + i * 1000, hours_ago=100 + i) for i in range(10)]
+    fresh = [item("HIT", views=500_000, hours_ago=10), item("MEH", views=150_000, hours_ago=10),
+             item("OLD", views=900_000, hours_ago=60), item("BAD", views=900_000, hours_ago=5, caption="политика")]
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps(history + fresh))
+    trends.fetch(cfg, con, False, f)
+    trends.select(cfg, con, False)
+    st = {r[0]: (r[1], r[2]) for r in con.execute("SELECT shortcode, state, reason FROM sources")}
+    assert st["HIT"][0] == "selected" and st["MEH"] == ("new", "wait:below_threshold")
+    assert st["OLD"] == ("rejected", "too_old") and st["BAD"][0] == "rejected"
+    score = con.execute("SELECT score FROM sources WHERE shortcode='HIT'").fetchone()[0]
+    assert 4 < score < 5
+
+
+def test_dhash_same_video_reencoded(media, tmp_path):
+    small = tmp_path / "small.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(media["src25"]), "-vf", "scale=540:960",
+                    "-crf", "35", str(small)], check=True)
+    assert video.hash_distance(video.video_hashes(media["src25"], 5), video.video_hashes(small, 5)) <= 6
+    assert video.hash_distance(video.video_hashes(media["src25"], 5), video.video_hashes(media["midroll"], 5)) > 20
+
+
+def test_download_dedup(cfg, con, media, tmp_path, monkeypatch):
+    copy = tmp_path / "reupload.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(media["src25"]), "-vf", "scale=540:960",
+                    "-crf", "33", str(copy)], check=True)
+    files = {"ORIG": media["src25"], "REUP": copy, "OTHER": media["midroll"]}
+
+    def fake_download(c, src):
+        p = c["data"] / "sources" / f"{src['shortcode']}.mp4"
+        shutil.copy(files[src["shortcode"]], p)
+        return p
+
+    monkeypatch.setattr(trends, "download_one", fake_download)
+    for i, code in enumerate(("ORIG", "REUP", "OTHER")):
+        con.execute("INSERT INTO sources (shortcode, donor, url, video_url, fetched_at, state) VALUES (?,?,?,?,?, 'selected')",
+                    (code, "d", "u", "v", f"2026-11-17T00:00:0{i}Z"))
+    con.commit()
+    assert trends.download(cfg, con, False) == {"ready": 2, "duplicate": 1}
+    st = dict(con.execute("SELECT shortcode, state FROM sources"))
+    assert st == {"ORIG": "ready", "REUP": "duplicate", "OTHER": "ready"}
+    assert not (cfg["data"] / "sources" / "REUP.mp4").exists()
