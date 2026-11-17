@@ -624,7 +624,7 @@ active --disabled--> banned (terminal; operator can override with CLI)
    - `load(path=None) -> dict`: `load_env(ROOT/".env")`, read `CLIPS_CONFIG` env var or `ROOT/"config.toml"` with `tomllib`, resolve relative paths (`data_dir`, `banners.top`, `banners.midroll`, each `accounts[].background`) against `ROOT`, create data subfolders (`raw sources build screenshots backups locks tmp`), call `validate(cfg)`, return dict. Add `cfg["data"] = Path(...)` for convenience.
    - `validate(cfg)`: collect ALL problems into a list, then `raise SystemExit("config errors:\n- ...")` if any. Checks:
      - nicks unique; each account has non-empty `adspower_id` and an existing `background` file.
-     - each account's `caption_lang` is `japanese`, `russian` or `none`; `captions.donors_<lang>` is non-empty for every language some account uses.
+     - each account's `caption_lang` is `japanese`, `russian` or `none`; for every account with `japanese` or `russian`, `captions.donors_<that language>` is non-empty (`none` needs no donors).
      - `1 <= daily_limit <= 3` (H6: hard cap 3 regardless of anything).
      - `banners.top` exists; if `banners.midroll` is non-empty it exists.
      - `banners.top_min_height_px >= ceil(compose.height / 6)` and `banners.top_height_px >= banners.top_min_height_px`.
@@ -653,7 +653,7 @@ active --disabled--> banned (terminal; operator can override with CLI)
 
 1. `clips/db.py` contents:
    - `SCHEMA`: the SQL from section 2.4, verbatim.
-   - `connect(path) -> sqlite3.Connection`: `sqlite3.connect(path, timeout=30)`, `row_factory = sqlite3.Row`, `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=30000`, `executescript(SCHEMA)`, return.
+   - `connect(path) -> sqlite3.Connection`: `sqlite3.connect(path, timeout=30)`, `row_factory = sqlite3.Row`, `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=30000`, `executescript(SCHEMA)`, return. Signature `connect(path, readonly=False)`: with `readonly=True` (used for every `--dry-run`) open `file:{path}?mode=ro` (URI), or an in-memory DB with the schema if the file does not exist, and skip the WAL pragma. A dry run then never creates or migrates the DB, and any accidental write raises `sqlite3.OperationalError`. Test: `tests/test_db.py`.
    - `now_iso() -> str`: `datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")`.
    - `iso(dt) -> str` and `parse_iso(s) -> datetime` (aware UTC). `datetime.fromisoformat` handles the `Z` suffix on 3.11+.
    - `set_account_status(con, nick, status, reason=None, paused_until=None)`: one UPDATE, sets `updated_at`.
@@ -674,10 +674,10 @@ active --disabled--> banned (terminal; operator can override with CLI)
 
 **Steps:**
 
-1. `argparse` with subcommands from section 2.6. Global flags: `--dry-run`, `--verbose`, `--config PATH`.
+1. `argparse` with subcommands from section 2.6. Flags `--dry-run`, `--verbose`, `--config PATH` are accepted both before and after the command (`--dry-run plan` and `plan --dry-run`): register them on the root parser and on every subparser, with `default=argparse.SUPPRESS` on the subparsers so a flag given before the command is not reset to its default.
 2. `main()`:
    - `logging.basicConfig(level=DEBUG if verbose else INFO, stream=sys.stdout, format=...)`.
-   - `cfg = config.load(args.config)`; `con = db.connect(cfg["data"]/"clips.db")`.
+   - `cfg = config.load(args.config)`; `con = db.connect(cfg["data"]/"clips.db", readonly=args.dry_run)`.
    - Dispatch to the module function (each module exposes `run_<command>(cfg, con, args, dry)` or a similarly obvious name). Commands not implemented yet: print "not implemented yet (phase N)" and exit 2.
    - Wrap dispatch in `try/except Exception`: `log.exception(...)`; if not dry and Telegram is configured (`TELEGRAM_BOT_TOKEN` set; `telegram.send` exists from Task 4.3, before that only log), send `⚠️ Ошибка в команде <cmd>: <ExceptionType>: <message[:300]>`; `sys.exit(1)`. Do not let a Telegram failure hide the original error (wrap the send in its own try/except).
 3. `init-db`: just connect (schema is created on connect) and print the DB path.
@@ -1427,19 +1427,29 @@ def test_dhash_different_videos(media):
    A caption is never freed again, even if the publication later fails ("used once" is the rule).
 4. Bio (command `set-bio --account NICK [--force]`; run once when an account is onboarded, see Runbook):
    - Refuse if `caption_lang = none`, or `accounts.bio_set_at` is set and no `--force`, or DB status is `check`/`banned`.
-   - Pick (pure-ish, H10):
+   - Pick and reserve (H10). The planner takes captions without the browser lock, so the bio caption is reserved atomically BEFORE the browser starts and released if the update fails; otherwise the planner could give the same caption to a post:
      ```python
-     def pick_bio(con, cfg, lang) -> tuple[int, str] | None:
+     def reserve_bio(con, cfg, lang, nick) -> tuple[int, str] | None:
          brands = cfg["captions"]["brand_words"]
          for r in con.execute("SELECT id, text, source, source_name FROM captions "
-                              "WHERE lang = ? AND used_at IS NULL ORDER BY random()", (lang,)):
+                              "WHERE lang = ? AND used_at IS NULL ORDER BY random()", (lang,)).fetchall():
              bio = re.sub(r"\n{3,}", "\n\n", HASHTAG_RE.sub("", r["text"])).strip()
-             if 0 < len(bio) <= cfg["captions"]["bio_max_chars"] and \
-                     not has_brand(bio, brands + [r["source"], r["source_name"]]):
+             if not (0 < len(bio) <= cfg["captions"]["bio_max_chars"]) or \
+                     has_brand(bio, brands + [r["source"], r["source_name"]]):
+                 continue
+             with con:
+                 cur = con.execute("UPDATE captions SET used_at = ?, used_for = ? WHERE id = ? AND used_at IS NULL",
+                                   (db.now_iso(), f"bio:{nick}", r["id"]))
+             if cur.rowcount == 1:          # 0 = the planner took it a moment ago, try the next one
                  return r["id"], bio
          return None
+
+     def release_bio(con, caption_id):
+         with con:
+             con.execute("UPDATE captions SET used_at = NULL, used_for = NULL WHERE id = ?", (caption_id,))
      ```
-   - Browser: `browser_lock` + `session` -> `goto https://www.instagram.com/accounts/edit/` -> health check -> click `BIO_TEXTAREA`, select all (`Control+A`), type the bio with human delays -> dry-run: screenshot `before_bio_submit`, stop -> click `BIO_SUBMIT` -> reload -> read the textarea value and compare with the bio after collapsing whitespace -> mark the caption used (`bio:<nick>`), set `accounts.bio_set_at`, `bio_caption_id`.
+     Dry-run: pick without reserving (the read-only DB rejects the UPDATE), just print the chosen bio.
+   - Browser: `browser_lock` + `session` -> `goto https://www.instagram.com/accounts/edit/` -> health check -> click `BIO_TEXTAREA`, select all (`Control+A`), type the bio with human delays -> dry-run: screenshot `before_bio_submit`, stop -> click `BIO_SUBMIT` -> reload -> read the textarea value and compare with the bio after collapsing whitespace -> set `accounts.bio_set_at`, `bio_caption_id` (the caption is already reserved). Any failure in the browser part -> `release_bio`, then re-raise.
    - Selectors (starting points, verify in the dry-run screenshot, fix only in `ig_selectors.py`):
      ```python
      BIO_TEXTAREA = ['textarea#pepBio', 'textarea[name="biography"]',
@@ -1474,7 +1484,7 @@ def test_clean_caption(cfg):
 def test_take_caption_once(con):
     # 2 free japanese captions: two takes return both, the third returns None; lang 'none' -> (None, '')
 
-def test_pick_bio(con, cfg):
+def test_reserve_bio(con, cfg):
     # candidates: a 200-char caption, one containing "Disney", one 80-char clean caption with "#旅行"
     # -> returns the 80-char one, without the hashtag
 ```
@@ -1483,6 +1493,7 @@ def test_pick_bio(con, cfg):
 - [ ] Tests pass.
 - [ ] Real run with 2 Japanese donors: `sqlite3 data/clips.db "select lang, count(*), sum(used_at is null) from captions group by 1"` shows new rows; a second run right after adds none.
 - [ ] HUMAN CHECK: the owner reads 20 random cleaned captions (with a translator): no brand header lines, no @mentions or links, neutral topics.
+- [ ] Test: while a bio caption is reserved, `take_caption` never returns it; after `release_bio` it is free again.
 - [ ] HUMAN CHECK: `set-bio --account X --dry-run` screenshot shows the bio typed; the real run shows it on the profile; a second run refuses.
 
 ### Task 3.6: Planner (spec module 9)
