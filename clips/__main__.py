@@ -10,7 +10,6 @@ log = logging.getLogger("clips")
 
 # command -> phase in which it gets implemented (docs/IMPLEMENTATION_PLAN.md, section 2.6)
 LATER = {
-    "sync-accounts": 2, "account-status": 2, "health": 2, "publish-file": 2,
     "fetch-trends": 3, "select": 3, "download": 3, "trends": 3, "harvest-captions": 3, "set-bio": 3,
     "plan": 3, "publish": 3,
     "stats": 4, "submit-check": 4, "bot": 4, "summary": 4,
@@ -41,6 +40,18 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--text", help="text plate (needs compose.text_overlay = true)")
     v = sub.add_parser("validate", parents=[common], help="validate a built reel")
     v.add_argument("path")
+    sub.add_parser("sync-accounts", parents=[common], help="add config accounts to the DB")
+    s = sub.add_parser("account-status", parents=[common], help="set an account status by hand")
+    s.add_argument("nick")
+    s.add_argument("status", choices=["active", "paused", "check", "banned"])
+    s.add_argument("--reason", default="manual")
+    h = sub.add_parser("health", parents=[common], help="open the profile, check the account, close")
+    h.add_argument("--account", required=True)
+    f = sub.add_parser("publish-file", parents=[common], help="publish one local file (manual test)")
+    f.add_argument("--account", required=True)
+    f.add_argument("--file", required=True)
+    f.add_argument("--banner-type", required=True, choices=["static", "voiced"])
+    f.add_argument("--caption")
     for name, phase in LATER.items():
         sub.add_parser(name, parents=[common], help=f"(phase {phase})")
     return p
@@ -54,7 +65,10 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_command(args, cfg, con) -> int:
-    from clips import video
+    from clips import instagram, video
+    dry = args.dry_run
+    if args.command in ("sync-accounts", "account-status", "health", "publish-file") and not dry:
+        db.sync_accounts(con, cfg)
     if args.command == "init-db":
         print(cfg["data"] / "clips.db")
     elif args.command == "build":
@@ -67,6 +81,20 @@ def run_command(args, cfg, con) -> int:
         problems = video.validate(args.path, cfg, video.probe(args.path)["duration"])
         print("OK" if not problems else "\n".join(problems))
         return 1 if problems else 0
+    elif args.command == "sync-accounts":
+        for r in con.execute("SELECT nick, status FROM accounts ORDER BY nick"):
+            print(r["nick"], r["status"])
+    elif args.command == "account-status":
+        account_cfg(cfg, args.nick)
+        if not dry:
+            db.set_account_status(con, args.nick, args.status, args.reason)
+        print(f"@{args.nick}: {args.status}")
+    elif args.command == "health":
+        instagram.run_health(cfg, con, account_cfg(cfg, args.account), dry)
+    elif args.command == "publish-file":
+        state = instagram.run_publish_file(cfg, con, account_cfg(cfg, args.account), args.file,
+                                           args.banner_type, args.caption, dry)
+        return 0 if state in ("published", "built") else 1
     else:
         print(f"not implemented yet (phase {LATER[args.command]})")
         return 2

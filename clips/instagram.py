@@ -1,0 +1,379 @@
+"""Browser work through AdsPower: health check (spec module 11) and publishing (module 10).
+
+H1: there is no code here that edits or takes down a published post. Keep it that way.
+"""
+import fcntl
+import logging
+import random
+import re
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from playwright.sync_api import sync_playwright
+
+from clips import adspower, db, video
+from clips import ig_selectors as S
+
+log = logging.getLogger(__name__)
+IG = "https://www.instagram.com"
+
+
+class HealthProblem(Exception):
+    """Instagram shows a problem; args[0] is the health string from classify_health."""
+
+
+# ---------- browser plumbing ----------
+
+@contextmanager
+def browser_lock(cfg):
+    """H7: at most one AdsPower profile open at a time, across all commands."""
+    f = open(cfg["data"] / "locks" / "browser.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        log.info("another browser job is running, nothing to do")
+        raise SystemExit(0)
+    try:
+        yield
+    finally:
+        f.close()
+# ponytail: one profile at a time, add a counting semaphore if throughput ever needs 2-3 profiles
+
+
+def save_debug(cfg, page, nick, step) -> Path | None:
+    """H9: screenshot + HTML. Never raises: a failing screenshot must not hide the real error."""
+    base = cfg["data"] / "screenshots" / f"{datetime.now():%Y%m%d-%H%M%S}_{nick}_{step}"
+    try:
+        page.screenshot(path=f"{base}.png", full_page=True)
+        Path(f"{base}.html").write_text(page.content(), encoding="utf-8")
+        log.info("debug saved: %s.png", base)
+        return Path(f"{base}.png")
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not save debug for %s/%s: %s", nick, step, e)
+        return None
+
+
+@contextmanager
+def session(cfg, account):
+    """Open the account's AdsPower profile and yield a Playwright page; always close the profile."""
+    ws = adspower.start(cfg, account["adspower_id"])
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(ws)
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = ctx.new_page()
+            page.set_default_timeout(30_000)
+            try:
+                yield page
+            except Exception:
+                save_debug(cfg, page, account["nick"], "error")
+                raise
+            finally:
+                page.close()
+                browser.close()  # disconnects CDP only; AdsPower closes the browser below
+    finally:
+        adspower.stop(cfg, account["adspower_id"])
+
+
+def pause(cfg):
+    time.sleep(random.uniform(*cfg["publish"]["pause_sec"]))
+
+
+def first(page, candidates, timeout_ms=15_000, visible=True):
+    """First matching locator among alternative selectors; LookupError if none appears in time."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        for sel in candidates:
+            loc = page.locator(sel)
+            for i in range(loc.count()):  # hidden matches (old dialog steps) may come first
+                if not visible or loc.nth(i).is_visible():
+                    return loc.nth(i)
+        if time.monotonic() >= deadline:
+            raise LookupError(f"none visible: {candidates}")
+        page.wait_for_timeout(500)
+
+
+def maybe(page, candidates, timeout_ms=5_000):
+    """Like first(), but None instead of an error (for optional dialogs)."""
+    try:
+        return first(page, candidates, timeout_ms)
+    except LookupError:
+        return None
+
+
+def squash(s: str) -> str:
+    return " ".join((s or "").split())
+
+
+# ---------- health (module 11) ----------
+
+def classify_health(url: str, text: str, logged_in: bool) -> str:
+    """'ok' | 'logged_out' | 'checkpoint' | 'action_block' | 'disabled'"""
+    u, t = url.lower(), text.lower()
+    if any(s in u for s in S.URL_DISABLED) or any(s in t for s in S.TEXT_DISABLED):
+        return "disabled"
+    if any(s in u for s in S.URL_CHECKPOINT) or any(s in t for s in S.TEXT_CHECKPOINT):
+        return "checkpoint"
+    if any(s in u for s in S.URL_LOGIN) or not logged_in:
+        return "logged_out"
+    if any(s in t for s in S.TEXT_ACTION_BLOCK):
+        return "action_block"
+    return "ok"
+
+
+def page_text(page) -> str:
+    try:
+        return page.inner_text("body")[:20000]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def check_health(page) -> str:
+    return classify_health(page.url, page_text(page), maybe(page, S.LOGGED_IN, 10_000) is not None)
+
+
+HEALTH_STATUS = {  # health -> (DB status, Russian reason for the alert)
+    "action_block": ("paused", "ограничение действий"),
+    "checkpoint": ("check", "проверка (код или селфи)"),
+    "logged_out": ("check", "вышел из аккаунта"),
+    "disabled": ("banned", "аккаунт отключён"),
+}
+
+
+def alert(text, photo=None, dry=False):
+    # ponytail: Telegram arrives in Task 4.3; until then alerts go to the log only
+    log.warning("ALERT%s: %s%s", " (dry-run)" if dry else "", text, f" [screenshot: {photo}]" if photo else "")
+
+
+def apply_health(con, cfg, nick, health, screenshot=None, dry=False):
+    if health == "ok":
+        return
+    status, reason_ru = HEALTH_STATUS[health]
+    until = None
+    if status == "paused":
+        until = db.iso(datetime.now(timezone.utc) + timedelta(hours=cfg["publish"]["action_block_pause_hours"]))
+    if not dry:
+        db.set_account_status(con, nick, status, health, until)
+    alert(f"🔴 Аккаунт @{nick}: {reason_ru}. Публикации остановлены.", screenshot, dry)
+
+
+def db_status(con, nick) -> str:
+    row = con.execute("SELECT status FROM accounts WHERE nick = ?", (nick,)).fetchone()
+    return row["status"] if row else "active"
+
+
+# ---------- publishing (module 10) ----------
+
+def post_reel(page, cfg, nick, file_path, caption, dry, on_share=None) -> None:
+    p = cfg["publish"]
+
+    def step(name):
+        if dry:
+            save_debug(cfg, page, nick, name)
+        pause(cfg)
+
+    page.goto(IG + "/", wait_until="domcontentloaded")
+    health = check_health(page)
+    if health != "ok":
+        raise HealthProblem(health)
+    end = time.monotonic() + random.uniform(*p["warmup_sec"])  # look like a person browsing the feed
+    while time.monotonic() < end:
+        page.mouse.wheel(0, random.randint(300, 900))
+        page.wait_for_timeout(random.randint(1000, 3000))
+    step("feed")
+    first(page, S.CREATE).click()
+    if item := maybe(page, S.CREATE_POST_ITEM):
+        item.click()
+    step("create")
+    first(page, S.FILE_INPUT, visible=False).set_input_files(str(file_path))
+    if ok := maybe(page, S.REELS_NOTICE_OK):
+        ok.click()
+    step("uploaded")
+    if crop := maybe(page, S.CROP_BUTTON):
+        crop.click()
+        first(page, S.CROP_ORIGINAL).click()
+    first(page, S.NEXT).click()
+    pause(cfg)
+    first(page, S.NEXT).click()
+    step("edit")
+    if caption:
+        first(page, S.CAPTION).click()
+        page.keyboard.type(caption, delay=random.randint(*p["typing_delay_ms"]))
+    if dry:
+        save_debug(cfg, page, nick, "before_share")
+        page.keyboard.press("Escape")
+        if cancel := maybe(page, S.CANCEL_POST, 3_000):
+            cancel.click()
+        log.info("dry-run: stopped before Share for @%s", nick)
+        return
+    if on_share:
+        on_share()  # record share_clicked_at BEFORE the click: a crash after it may leave a live post
+    first(page, S.SHARE).click()
+    deadline = time.monotonic() + p["upload_timeout_sec"]
+    while time.monotonic() < deadline:
+        if maybe(page, S.SHARED_OK, 10_000):
+            return
+        if classify_health(page.url, page_text(page), True) == "action_block":
+            raise HealthProblem("action_block")
+    raise TimeoutError(f"no 'shared' confirmation within {p['upload_timeout_sec']} s")
+
+
+def find_reel(page, nick, caption, known: set[str], tries=3, wait_s=20) -> str | None:
+    """Shortcode of the reel we just posted. Pinned reels are why the caption is checked."""
+    want = squash(caption)[:30]
+    for attempt in range(tries):
+        page.goto(f"{IG}/{nick}/reels/", wait_until="domcontentloaded")
+        try:
+            page.wait_for_selector(S.REEL_LINK, timeout=15_000)
+            hrefs = [page.locator(S.REEL_LINK).nth(i).get_attribute("href")
+                     for i in range(min(6, page.locator(S.REEL_LINK).count()))]
+        except Exception:  # noqa: BLE001
+            hrefs = []
+        codes = [m.group(1) for h in hrefs if h and (m := re.search(r"/reel/([\w-]+)", h))]
+        fresh = [c for c in dict.fromkeys(codes) if c not in known]
+        log.debug("find_reel @%s try %s: hrefs=%s fresh=%s", nick, attempt, hrefs, fresh)
+        if fresh and not want:
+            # ponytail: no caption to match, a manually pinned unknown reel would be picked
+            return fresh[0]
+        for code in fresh:
+            page.goto(f"{IG}/reel/{code}/", wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            log.debug("find_reel %s text=%r want=%r", code, squash(page_text(page))[:80], want)
+            if want in squash(page_text(page)):
+                return code
+        if attempt < tries - 1:
+            time.sleep(wait_s)
+    return None
+
+
+MULT = {"k": 1e3, "к": 1e3, "тыс": 1e3, "m": 1e6, "м": 1e6, "млн": 1e6}
+
+
+def parse_followers(text: str) -> int | None:
+    m = re.search(r"(\d[\d\s.,]*?)\s*(k|m|к|м|тыс\.?|млн)?\s*(followers|подписчик)", text, re.I)
+    if not m:
+        return None
+    num = re.sub(r"\s", "", m.group(1))
+    suffix = (m.group(2) or "").lower().rstrip(".")
+    if suffix:
+        return int(float(num.replace(",", ".")) * MULT[suffix])
+    return int(re.sub(r"[.,]", "", num))
+
+
+def read_followers(page, nick) -> int | None:
+    try:
+        page.goto(f"{IG}/{nick}/", wait_until="domcontentloaded")
+        return parse_followers(page.locator('meta[name="description"]').get_attribute("content") or "")
+    except Exception as e:  # noqa: BLE001
+        log.info("followers of @%s not read: %s", nick, e)
+        return None
+
+
+def publish_one(cfg, con, pub: dict, account: dict, dry=False) -> str:
+    """Publish one built publication. Returns the new state (or 'skipped')."""
+    nick, pid = account["nick"], pub["id"]
+    if db_status(con, nick) != "active":
+        log.info("pub=%s account=%s not active, skipped", pid, nick)
+        return "skipped"
+    try:  # H4: never publish an invalid file; a missing or corrupt file is a failure, not a retry
+        problems = video.validate(pub["file_path"], cfg, video.probe(pub["file_path"])["duration"])
+    except Exception as e:  # noqa: BLE001
+        problems = [f"{type(e).__name__}: {str(e)[:200]}"]
+    if problems:
+        return _set(con, pid, dry, state="failed", error="invalid file: " + "; ".join(problems))
+    clicked = {"at": None}
+
+    def on_share():
+        clicked["at"] = db.now_iso()
+        _set(con, pid, dry, share_clicked_at=clicked["at"])
+
+    known = {r[0] for r in con.execute("SELECT ig_shortcode FROM publications WHERE ig_shortcode IS NOT NULL")}
+    try:
+        with session(cfg, account) as page:
+            try:
+                post_reel(page, cfg, nick, pub["file_path"], pub["caption"] or "", dry, on_share)
+            except HealthProblem as e:
+                shot = save_debug(cfg, page, nick, f"health_{e.args[0]}")
+                apply_health(con, cfg, nick, e.args[0], shot, dry)
+                return _set(con, pid, dry, state="unconfirmed" if clicked["at"] else "failed",
+                            error=f"health:{e.args[0]}")
+            if dry:
+                return "built"
+            code = find_reel(page, nick, pub["caption"] or "", known)
+            followers = read_followers(page, nick)
+    except (adspower.ProfileBusy, adspower.AdsPowerError) as e:
+        log.warning("pub=%s account=%s profile unavailable, retry later: %r", pid, nick, e)
+        return "built"
+    except Exception as e:  # noqa: BLE001  (screenshot already saved by session)
+        state = "unconfirmed" if clicked["at"] else "failed"
+        alert(f"⚠️ Ошибка публикации pub#{pid} @{nick}: {type(e).__name__}: {str(e)[:200]}", dry=dry)
+        log.exception("pub=%s account=%s publish error", pid, nick)
+        return _set(con, pid, dry, state=state, error=f"{type(e).__name__}: {str(e)[:300]}")
+    if followers is not None and not dry:
+        with con:
+            con.execute("UPDATE accounts SET followers = ?, updated_at = ? WHERE nick = ?",
+                        (followers, db.now_iso(), nick))
+    if not code:
+        alert(f"Рилс опубликован, но ссылку найти не удалось: @{nick} pub#{pid}. "
+              "Проверю завтра по статистике.", dry=dry)
+        return _set(con, pid, dry, state="unconfirmed")
+    state = _set(con, pid, dry, state="published", published_at=db.now_iso(), ig_shortcode=code,
+                 ig_url=f"{IG}/reel/{code}/")
+    built = Path(pub["file_path"]).resolve()
+    if built.is_relative_to((cfg["data"] / "build").resolve()):  # only our own build files, never user files
+        built.unlink(missing_ok=True)
+    log.info("pub=%s account=%s published %s/reel/%s/", pid, nick, IG, code)
+    return state
+
+
+def _set(con, pid, dry, **fields) -> str | None:
+    if not dry:
+        with con:
+            con.execute(f"UPDATE publications SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                        (*fields.values(), pid))
+    return fields.get("state")
+
+
+# ---------- CLI commands ----------
+
+def run_health(cfg, con, account, dry) -> str:
+    nick = account["nick"]
+    status = db_status(con, nick)
+    if status in ("check", "banned"):  # H5: the operator resolves these first
+        print(f"@{nick} has status {status}: not opening the profile until the operator resolves it")
+        return status
+    with browser_lock(cfg), session(cfg, account) as page:
+        page.goto(IG + "/", wait_until="domcontentloaded")
+        pause(cfg)
+        health = check_health(page)
+        shot = save_debug(cfg, page, nick, "health")
+    print(health)
+    apply_health(con, cfg, nick, health, shot, dry)
+    return health
+
+
+def run_publish_file(cfg, con, account, file_path, banner_type, caption, dry) -> str:
+    file_path = str(Path(file_path).resolve())
+    dup = con.execute("SELECT id FROM publications WHERE file_path = ? AND state IN ('published','unconfirmed')",
+                      (file_path,)).fetchone()
+    if dup:
+        raise SystemExit(f"already published as pub#{dup['id']}: refusing to post the same file twice")
+    if caption is None:
+        if account["caption_lang"] != "none":
+            raise SystemExit("--caption is required until the caption pool exists (phase 3)")
+        caption = ""
+    pub = {"id": None, "file_path": file_path, "caption": caption}
+    if not dry:
+        with con:
+            pub["id"] = con.execute(
+                "INSERT INTO publications (account, state, scheduled_at, file_path, background, banner_type, "
+                "caption, caption_lang, created_at) VALUES (?, 'built', ?, ?, ?, ?, ?, ?, ?)",
+                (account["nick"], db.now_iso(), file_path, Path(account["background"]).name, banner_type,
+                 caption, account["caption_lang"], db.now_iso())).lastrowid
+    with browser_lock(cfg):
+        state = publish_one(cfg, con, pub, account, dry)
+    print(f"pub#{pub['id']}: {state}")
+    return state
