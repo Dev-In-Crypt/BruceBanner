@@ -1,0 +1,10 @@
+[Unit]
+Description=clips report (weekly)
+
+[Timer]
+OnCalendar=Mon *-*-* 10:10:00 Europe/Moscow
+Persistent=true
+Unit=clips@report.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=clips harvest-captions (weekly)
+
+[Timer]
+OnCalendar=Sun *-*-* 05:10:00 Europe/Moscow
+Persistent=true
+Unit=clips@harvest-captions.service
+
+[Install]
+WantedBy=timers.target

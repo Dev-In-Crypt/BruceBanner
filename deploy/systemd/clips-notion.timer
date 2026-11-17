@@ -1,0 +1,10 @@
+[Unit]
+Description=clips notion-sync (hourly)
+
+[Timer]
+OnCalendar=*-*-* *:45:00
+Persistent=true
+Unit=clips@notion-sync.service
+
+[Install]
+WantedBy=timers.target
