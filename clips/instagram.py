@@ -13,7 +13,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from clips import adspower, db, video
+from clips import adspower, db, telegram, video
 from clips import ig_selectors as S
 
 log = logging.getLogger(__name__)
@@ -144,8 +144,7 @@ HEALTH_STATUS = {  # health -> (DB status, Russian reason for the alert)
 
 
 def alert(text, photo=None, dry=False):
-    # ponytail: Telegram arrives in Task 4.3; until then alerts go to the log only
-    log.warning("ALERT%s: %s%s", " (dry-run)" if dry else "", text, f" [screenshot: {photo}]" if photo else "")
+    telegram.send(text, photo=photo, dry=dry)
 
 
 def apply_health(con, cfg, nick, health, screenshot=None, dry=False):
@@ -374,3 +373,85 @@ def run_publish_file(cfg, con, account, file_path, banner_type, caption, dry) ->
         state = publish_one(cfg, con, pub, account, dry)
     print(f"pub#{pub['id']}: {state}")
     return state
+
+
+def run_publish(cfg, con, dry) -> list:
+    """Publish due built publications, one profile at a time, with pauses between accounts."""
+    by_nick = {a["nick"]: a for a in cfg["accounts"]}
+    results = []
+    with browser_lock(cfg):
+        if not dry:
+            db.sync_accounts(con, cfg)
+            for nick in db.resume_paused_accounts(con):
+                alert(f"Аккаунт @{nick} снова активен")
+        now = datetime.now(timezone.utc)
+        due = con.execute(
+            "SELECT p.* FROM publications p JOIN accounts a ON a.nick = p.account WHERE p.state = 'built' "
+            "AND p.scheduled_at <= ? AND a.status = 'active' ORDER BY p.scheduled_at LIMIT ?",
+            (db.iso(now), cfg["publish"]["max_per_run"])).fetchall()
+        gap_since = db.iso(now - timedelta(minutes=cfg["planner"]["min_gap_minutes"]))
+        for i, pub in enumerate(due):
+            account = by_nick.get(pub["account"])
+            recent = con.execute("SELECT 1 FROM publications WHERE account = ? AND published_at >= ?",
+                                 (pub["account"], gap_since)).fetchone()
+            if not account or recent:  # catch-up burst after downtime: keep the gap between posts
+                continue
+            if i:
+                time.sleep(random.uniform(*cfg["publish"]["between_accounts_sec"]))
+            results.append((pub["id"], publish_one(cfg, con, dict(pub), account, dry)))
+    for pid, state in results:
+        print(f"pub#{pid}: {state}")
+    return results
+
+
+def set_bio(page, cfg, nick, bio, dry) -> None:
+    page.goto(f"{IG}/accounts/edit/", wait_until="domcontentloaded")
+    health = check_health(page)
+    if health != "ok":
+        raise HealthProblem(health)
+    box = first(page, S.BIO_TEXTAREA)
+    box.click()
+    page.keyboard.press("Control+A")
+    page.keyboard.type(bio, delay=random.randint(*cfg["publish"]["typing_delay_ms"]))
+    if dry:
+        save_debug(cfg, page, nick, "before_bio_submit")
+        return
+    pause(cfg)
+    first(page, S.BIO_SUBMIT).click()
+    page.wait_for_timeout(3000)
+    page.reload(wait_until="domcontentloaded")
+    got = first(page, S.BIO_TEXTAREA).input_value()
+    if squash(got) != squash(bio):
+        raise RuntimeError(f"bio not saved: page shows {got[:60]!r}")
+
+
+def run_set_bio(cfg, con, account, force, dry) -> str:
+    from clips import captions
+    nick, lang = account["nick"], account["caption_lang"]
+    row = con.execute("SELECT status, bio_set_at FROM accounts WHERE nick = ?", (nick,)).fetchone()
+    if lang == "none":
+        raise SystemExit(f"@{nick} has caption_lang none: no bio")
+    if row and row["status"] in ("check", "banned"):
+        raise SystemExit(f"@{nick} has status {row['status']}: resolve it first")
+    if row and row["bio_set_at"] and not force:
+        raise SystemExit(f"@{nick} bio already set at {row['bio_set_at']} (use --force)")
+    if dry:
+        pick = next(captions.bio_candidates(con, cfg, lang), None)
+    else:
+        pick = captions.reserve_bio(con, cfg, lang, nick)
+    if not pick:
+        raise SystemExit(f"no free {lang} caption usable as a bio: run harvest-captions")
+    cid, bio = pick
+    try:
+        with browser_lock(cfg), session(cfg, account) as page:
+            set_bio(page, cfg, nick, bio, dry)
+    except BaseException:
+        if not dry:
+            captions.release_bio(con, cid)
+        raise
+    if not dry:
+        with con:
+            con.execute("UPDATE accounts SET bio_set_at = ?, bio_caption_id = ?, updated_at = ? WHERE nick = ?",
+                        (db.now_iso(), cid, db.now_iso(), nick))
+    print(f"@{nick} bio{' (dry-run)' if dry else ''}: {bio}")
+    return bio
