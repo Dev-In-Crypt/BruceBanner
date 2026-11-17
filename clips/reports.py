@@ -1,4 +1,4 @@
-"""Daily summary (Task 4.5); the weekly report arrives in Phase 5."""
+"""Daily summary (Task 4.5) and weekly report (Task 5.2) for the operator."""
 import shutil
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -53,3 +53,57 @@ def summary_text(con, cfg, now=None) -> str:
 
 def run_summary(cfg, con, dry):
     telegram.send(summary_text(con, cfg), dry=dry)
+
+
+# ---------- weekly report (Task 5.2) ----------
+
+GROUPS = (("account", "Аккаунты"), ("donor", "Доноры"), ("background", "Фоны"), ("banner_type", "Баннер"),
+          ("caption_lang", "Язык подписи"))
+
+
+def weekly(con, cfg, now=None) -> str:
+    import html
+    import statistics
+    now = now or datetime.now(timezone.utc)
+    since, min_paid = db.iso(now - timedelta(days=7)), cfg["playerok"]["min_paid_views"]
+    rows = con.execute("SELECT p.*, s.donor FROM publications p LEFT JOIN sources s ON s.id = p.source_id "
+                       "WHERE p.published_at >= ?", (since,)).fetchall()
+    num = telegram.num
+    out = [f"📈 Неделя до {now.astimezone(ZoneInfo(cfg['timezone'])):%d.%m.%Y}"]
+    views = [r["last_views"] or 0 for r in rows]
+    pct = lambda vs: f"{100 * sum(v >= min_paid for v in vs) / len(vs):.0f}%" if vs else "-"  # noqa: E731
+    approved = con.execute("SELECT account, SUM(amount_rub), COUNT(*) FROM publications WHERE submit_status = "
+                           "'approved' AND decided_at >= ? GROUP BY account ORDER BY 2 DESC", (since,)).fetchall()
+    rejected = con.execute("SELECT reject_reason, COUNT(*) FROM publications WHERE submit_status = 'rejected' "
+                           "AND decided_at >= ? GROUP BY 1 ORDER BY 2 DESC LIMIT 5", (since,)).fetchall()
+    pending = con.execute("SELECT COUNT(*) FROM publications WHERE submit_status IN ('submit_now','submitted')"
+                          ).fetchone()[0]
+    totals = (f"Итого: роликов {len(rows)}, просмотров {num(sum(views))}, 50k+ {pct(views)}, "
+              f"одобрено {num(sum(r[1] for r in approved))} ₽, ждут подачи/решения {pending}")
+    sections = []
+    for key, label in GROUPS:
+        groups = {}
+        for r in rows:
+            groups.setdefault(r[key] or "-", []).append(r)
+        lines = [f"{label}:", f"{'':16} {'шт':>3} {'просм.':>10} {'медиана':>9} {'50k+':>5}"]
+        for name, rs in sorted(groups.items(), key=lambda kv: -sum(r["last_views"] or 0 for r in kv[1]))[:10]:
+            vs = [r["last_views"] or 0 for r in rs]
+            line = f"{str(name)[:16]:16} {len(rs):>3} {num(sum(vs)):>10} {num(statistics.median(vs)):>9} {pct(vs):>5}"
+            if key == "caption_lang":
+                geo = [r["ru_audience_pct"] for r in rs if r["ru_audience_pct"] is not None]
+                line += f"  РФ {sum(geo) / len(geo):.0f}% (n={len(geo)})" if geo else "  РФ - (n=0)"
+            lines.append(line)
+        sections.append("\n".join(lines))
+    money = ["Деньги за неделю:"] + [f"@{a}: {num(s)} ₽ ({c} шт)" for a, s, c in approved]
+    money += [f"Отказ ({c}): {reason or '-'}" for reason, c in rejected] or []
+    body = sections + ["\n".join(money)]
+    head = f"{out[0]}\n{totals}\n"
+    text = head + "<pre>" + html.escape("\n\n".join(body)) + "</pre>"
+    while len(text) > 4096 and body:  # trim groups, never the totals
+        body.pop(0)
+        text = head + "<pre>" + html.escape("\n\n".join(body)) + "</pre>"
+    return text
+
+
+def run_report(cfg, con, dry):
+    telegram.send(weekly(con, cfg), dry=dry)

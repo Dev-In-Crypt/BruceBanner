@@ -8,12 +8,6 @@ from clips import config, db
 
 log = logging.getLogger("clips")
 
-# command -> phase in which it gets implemented (docs/IMPLEMENTATION_PLAN.md, section 2.6)
-LATER = {
-    "notion-setup": 5, "notion-sync": 5, "report": 5, "maintenance": 5,
-}
-
-
 def common_flags(suppress: bool) -> argparse.ArgumentParser:
     # Subcommands use SUPPRESS defaults so a flag given before the command is not reset by them.
     d = {"default": argparse.SUPPRESS} if suppress else {}
@@ -65,8 +59,11 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("submit-check", parents=[common], help="only the submit logic + notifications")
     sub.add_parser("bot", parents=[common], help="long-running Telegram bot for the operator")
     sub.add_parser("summary", parents=[common], help="daily summary to Telegram")
-    for name, phase in LATER.items():
-        sub.add_parser(name, parents=[common], help=f"(phase {phase})")
+    ns = sub.add_parser("notion-setup", parents=[common], help="create the two Notion databases")
+    ns.add_argument("--parent-page", required=True, help="Notion page id to create the databases in")
+    sub.add_parser("notion-sync", parents=[common], help="push changed rows to Notion")
+    sub.add_parser("report", parents=[common], help="weekly report to Telegram")
+    sub.add_parser("maintenance", parents=[common], help="old files, DB backup, disk alert")
     return p
 
 
@@ -78,7 +75,7 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_command(args, cfg, con) -> int:
-    from clips import captions, instagram, planner, reports, submit, telegram, trends, video
+    from clips import captions, instagram, maintenance, notion, planner, reports, submit, telegram, trends, video
     dry = args.dry_run
     if args.command in ("sync-accounts", "account-status", "health", "publish-file") and not dry:
         db.sync_accounts(con, cfg)
@@ -134,9 +131,14 @@ def run_command(args, cfg, con) -> int:
         telegram.run_bot(cfg, con)
     elif args.command == "summary":
         reports.run_summary(cfg, con, dry)
-    else:
-        print(f"not implemented yet (phase {LATER[args.command]})")
-        return 2
+    elif args.command == "notion-setup":
+        notion.setup(cfg, args.parent_page, dry)
+    elif args.command == "notion-sync":
+        notion.sync(cfg, con, dry)
+    elif args.command == "report":
+        reports.run_report(cfg, con, dry)
+    elif args.command == "maintenance":
+        maintenance.run_maintenance(cfg, con, dry)
     return 0
 
 
