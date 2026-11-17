@@ -237,12 +237,12 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
             base = Path(tmp) / "base.mp4"  # high-quality intermediate, re-encoded once more below
             dur = compose_base(src, frame, cfg, base, 12, "veryfast", text, tmp)
             m = insert_midroll(base, t, cfg, part)
-    os.replace(part, out)
     final = dur + m
-    problems = validate(out, cfg, final, (t, t + m) if t is not None else None)
-    if problems:
-        out.unlink(missing_ok=True)
+    problems = validate(part, cfg, final, (t, t + m) if t is not None else None)
+    if problems:  # a previous good file at `out` stays untouched
+        part.unlink(missing_ok=True)
         raise ValueError("; ".join(problems))
+    os.replace(part, out)
     return {"duration": round(final, 3), "midroll_at": t, "midroll_dur": round(m, 3),
             "banner_type": "voiced" if t is not None else "static",
             "banner_file": Path(b["top"]).name, "background": Path(account["background"]).name}
