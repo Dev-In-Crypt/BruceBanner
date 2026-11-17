@@ -42,7 +42,7 @@ def test_bio_reserve_release(con, cfg):
     assert bio == "海辺の朝、静かな時間が流れる。"                       # short, no hashtag, no brand
     assert captions.take_caption(con, "japanese", "pub:9")[1] != "海辺の朝、静かな時間が流れる。 #旅行"
     captions.release_bio(con, cid)
-    assert captions.take_caption(con, "japanese", "pub:9")[0] == cid  # free again after release
+    assert tuple(con.execute("SELECT used_at, used_for FROM captions WHERE id = ?", (cid,)).fetchone()) == (None, None)
 
 
 def test_harvest_from_file(cfg, con, tmp_path):
