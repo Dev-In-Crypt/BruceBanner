@@ -102,3 +102,13 @@ def test_build_with_text(cfg, media, tmp_path):
     cfg["compose"]["text_overlay"] = True
     meta = video.build(media["src8"], cfg["accounts"][0], cfg, tmp_path / "t.mp4", text="Смотри до конца")
     assert meta["banner_type"] == "static"
+
+
+def test_failed_rebuild_keeps_previous_file(cfg, media, tmp_path):
+    out = tmp_path / "s.mp4"
+    video.build(media["src8"], cfg["accounts"][0], cfg, out)
+    before = out.read_bytes()
+    cfg["compose"]["banner_check_max_diff"] = -1      # force validation to fail
+    with pytest.raises(ValueError, match="banner"):
+        video.build(media["src8"], cfg["accounts"][0], cfg, out)
+    assert out.read_bytes() == before and not list(tmp_path.glob("*.part.mp4"))
