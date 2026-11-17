@@ -158,3 +158,16 @@ def resume_paused_accounts(con) -> list[str]:
     for n in nicks:
         set_account_status(con, n, "active")
     return nicks
+
+
+def sync_accounts(con, cfg) -> None:
+    """Config holds static account fields, the DB holds runtime state. Never deletes, never resets status."""
+    import logging
+    with con:
+        for a in cfg["accounts"]:
+            con.execute("INSERT OR IGNORE INTO accounts (nick, status, updated_at) VALUES (?, 'active', ?)",
+                        (a["nick"], now_iso()))
+    configured = {a["nick"] for a in cfg["accounts"]}
+    for r in con.execute("SELECT nick FROM accounts"):
+        if r["nick"] not in configured:
+            logging.getLogger(__name__).warning("account %s is in the DB but not in config", r["nick"])
