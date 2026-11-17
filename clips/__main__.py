@@ -10,7 +10,6 @@ log = logging.getLogger("clips")
 
 # command -> phase in which it gets implemented (docs/IMPLEMENTATION_PLAN.md, section 2.6)
 LATER = {
-    "stats": 4, "submit-check": 4, "bot": 4, "summary": 4,
     "notion-setup": 5, "notion-sync": 5, "report": 5, "maintenance": 5,
 }
 
@@ -61,6 +60,11 @@ def parser() -> argparse.ArgumentParser:
     sb.add_argument("--force", action="store_true")
     sub.add_parser("plan", parents=[common], help="plan today's slots, build and validate them")
     sub.add_parser("publish", parents=[common], help="publish due built publications")
+    st = sub.add_parser("stats", parents=[common], help="collect views, decide what to submit, notify")
+    st.add_argument("--from-file", help="use a saved Apify JSON dump instead of calling Apify")
+    sub.add_parser("submit-check", parents=[common], help="only the submit logic + notifications")
+    sub.add_parser("bot", parents=[common], help="long-running Telegram bot for the operator")
+    sub.add_parser("summary", parents=[common], help="daily summary to Telegram")
     for name, phase in LATER.items():
         sub.add_parser(name, parents=[common], help=f"(phase {phase})")
     return p
@@ -74,7 +78,7 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_command(args, cfg, con) -> int:
-    from clips import captions, instagram, planner, trends, video
+    from clips import captions, instagram, planner, reports, submit, telegram, trends, video
     dry = args.dry_run
     if args.command in ("sync-accounts", "account-status", "health", "publish-file") and not dry:
         db.sync_accounts(con, cfg)
@@ -122,6 +126,14 @@ def run_command(args, cfg, con) -> int:
         planner.plan(cfg, con, dry)
     elif args.command == "publish":
         instagram.run_publish(cfg, con, dry)
+    elif args.command == "stats":
+        submit.run_stats(cfg, con, dry, args.from_file)
+    elif args.command == "submit-check":
+        submit.run_submit_check(cfg, con, dry)
+    elif args.command == "bot":
+        telegram.run_bot(cfg, con)
+    elif args.command == "summary":
+        reports.run_summary(cfg, con, dry)
     else:
         print(f"not implemented yet (phase {LATER[args.command]})")
         return 2
@@ -136,9 +148,10 @@ def main(argv=None) -> int:
     con = db.connect(cfg["data"] / "clips.db", readonly=args.dry_run)
     try:
         return run_command(args, cfg, con)
-    except Exception:
-        # ponytail: Telegram alert on failure arrives with telegram.send in Task 4.3; log only until then
+    except Exception as e:
         log.exception("command %s failed", args.command)
+        from clips import telegram
+        telegram.send(telegram.msg_error(args.command, e), dry=args.dry_run)  # never raises
         return 1
 
 

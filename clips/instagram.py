@@ -156,7 +156,10 @@ def apply_health(con, cfg, nick, health, screenshot=None, dry=False):
         until = db.iso(datetime.now(timezone.utc) + timedelta(hours=cfg["publish"]["action_block_pause_hours"]))
     if not dry:
         db.set_account_status(con, nick, status, health, until)
-    alert(f"🔴 Аккаунт @{nick}: {reason_ru}. Публикации остановлены.", screenshot, dry)
+    text, buttons = telegram.msg_account(nick, status, reason_ru)
+    telegram.send(text, buttons, screenshot, dry)
+    from clips import submit  # account in danger: its reels with 50k+ should be submitted now
+    submit.run_submit_check(cfg, con, dry, nick=nick)
 
 
 def db_status(con, nick) -> str:
