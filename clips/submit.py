@@ -52,10 +52,11 @@ def decide(views, age_days, views_48h_ago, account_status, p) -> tuple[str, str 
 
 
 def views_48h_ago(con, pub_id, now) -> int | None:
-    # 3 h tolerance: the daily job does not run at exactly the same second every day
+    # 48 h +/- 3 h: the daily job does not run at exactly the same second every day. Older snapshots
+    # (a missed run) would turn multi-day growth into "48 h growth", so they count as no baseline.
     row = con.execute("SELECT views FROM view_snapshots WHERE publication_id = ? AND taken_at <= ? "
-                      "ORDER BY taken_at DESC LIMIT 1",
-                      (pub_id, db.iso(now - timedelta(hours=45)))).fetchone()
+                      "AND taken_at >= ? ORDER BY taken_at DESC LIMIT 1",
+                      (pub_id, db.iso(now - timedelta(hours=45)), db.iso(now - timedelta(hours=51)))).fetchone()
     return row[0] if row else None
 
 
