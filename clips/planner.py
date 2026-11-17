@@ -42,10 +42,15 @@ def day_bounds(now_utc, tz) -> tuple[str, str]:
     return db.iso(start), db.iso(start + timedelta(days=1))
 
 
+# A failed publication frees its source, so the next attempt number must count failed rows too
+# (UNIQUE(source_id, attempt) would otherwise reject the retry forever).
+MAX_ATTEMPT = "COALESCE((SELECT MAX(x.attempt) FROM publications x WHERE x.source_id = s.id), 0) AS max_attempt"
+
+
 def fresh_sources(con, cfg, now) -> list:
     min_posted = db.iso(now - timedelta(hours=cfg["planner"]["max_source_age_hours"]))
     return con.execute(
-        "SELECT s.* FROM sources s WHERE s.state = 'ready' AND s.posted_at >= ? AND NOT EXISTS "
+        "SELECT s.*, " + MAX_ATTEMPT + " FROM sources s WHERE s.state = 'ready' AND s.posted_at >= ? AND NOT EXISTS "
         "(SELECT 1 FROM publications p WHERE p.source_id = s.id AND p.state != 'failed') ORDER BY s.score DESC",
         (min_posted,)).fetchall()
 
@@ -55,7 +60,7 @@ def repost_source(con, cfg, nick, now):
     p = cfg["planner"]
     last_ok = db.iso(now - timedelta(days=max(p["repost_after_days"], p["cross_account_gap_days"])))
     return con.execute(
-        "SELECT s.*, MAX(p.attempt) AS max_attempt FROM sources s "
+        "SELECT s.*, " + MAX_ATTEMPT + " FROM sources s "
         "JOIN publications p ON p.source_id = s.id AND p.state != 'failed' WHERE s.state = 'ready' "
         "GROUP BY s.id HAVING SUM(p.state != 'published' OR p.last_views IS NULL OR p.last_views >= ?) = 0 "
         "AND SUM(p.account = ?) = 0 AND COUNT(*) < ? AND MAX(p.published_at) <= ? ORDER BY s.score DESC LIMIT 1",
@@ -83,7 +88,7 @@ def plan(cfg, con, dry, now=None, rng=None) -> list[dict]:
             slot = src and pick_slot(now, now.astimezone(tz).date(), existing, p, tz, rng)
             if not slot:
                 break
-            attempt = (src["max_attempt"] + 1) if "max_attempt" in src.keys() else 1
+            attempt = src["max_attempt"] + 1
             item = {"account": a["nick"], "local_time": slot.astimezone(tz).strftime("%H:%M"),
                     "source": src["shortcode"], "score": round(src["score"] or 0, 1), "attempt": attempt}
             if not dry:
