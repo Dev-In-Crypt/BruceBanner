@@ -171,23 +171,39 @@ def handle_update(con, cfg, update, pending: dict) -> list[tuple[int, str]]:
     return [(chat, HELP)]
 
 
+MAX_TRIES = 3  # a press that keeps failing is skipped after this many tries, so the bot never gets stuck
+
+
+def poll_once(con, cfg, offset, pending, fails) -> int:
+    """One getUpdates round. Returns the next offset; a failed update keeps it, so Telegram redelivers it."""
+    try:
+        updates = _api("getUpdates", json={"offset": offset, "timeout": 50,
+                                           "allowed_updates": ["message", "callback_query"]})
+    except TelegramError as e:
+        log.warning("getUpdates failed: %s", e)
+        time.sleep(5)
+        return offset
+    for u in updates:
+        uid = u["update_id"]
+        try:
+            for chat, text in handle_update(con, cfg, u, pending):
+                _api("sendMessage", json={"chat_id": chat, "text": text})
+            if "callback_query" in u:
+                _api("answerCallbackQuery", json={"callback_query_id": u["callback_query"]["id"]})
+        except Exception:  # noqa: BLE001
+            fails[uid] = fails.get(uid, 0) + 1
+            log.exception("update %s failed (try %s of %s)", uid, fails[uid], MAX_TRIES)
+            if fails[uid] < MAX_TRIES:
+                time.sleep(5)
+                return uid  # not acknowledged: the next getUpdates returns it again
+            send(f"⚠️ Бот не смог обработать действие (update {uid}). Повторите нажатие.")
+        fails.pop(uid, None)
+        offset = uid + 1
+    return offset
+
+
 def run_bot(cfg, con):
-    offset, pending = 0, {}
+    offset, pending, fails = 0, {}, {}
     # ponytail: pending answers live in memory; after a bot restart the operator presses the button again
     while True:
-        try:
-            updates = _api("getUpdates", json={"offset": offset, "timeout": 50,
-                                               "allowed_updates": ["message", "callback_query"]})
-        except TelegramError as e:
-            log.warning("getUpdates failed: %s", e)
-            time.sleep(5)
-            continue
-        for u in updates:
-            offset = u["update_id"] + 1
-            try:
-                for chat, text in handle_update(con, cfg, u, pending):
-                    _api("sendMessage", json={"chat_id": chat, "text": text})
-                if "callback_query" in u:
-                    _api("answerCallbackQuery", json={"callback_query_id": u["callback_query"]["id"]})
-            except Exception:  # noqa: BLE001
-                log.exception("update %s failed", u.get("update_id"))
+        offset = poll_once(con, cfg, offset, pending, fails)

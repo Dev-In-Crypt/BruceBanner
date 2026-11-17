@@ -89,3 +89,36 @@ def test_token_never_in_error(monkeypatch):
     assert "SECRET" not in str(e.value) and "***" in str(e.value)
     monkeypatch.setenv("TELEGRAM_OPERATOR_IDS", "1")
     assert telegram.send("x") is False                          # failure reported, not raised
+
+
+def test_failed_update_is_redelivered_then_skipped(cfg, con, bot, monkeypatch):
+    press, say = bot
+    calls = {"getUpdates": 0}
+    monkeypatch.setattr(telegram.time, "sleep", lambda s: None)
+
+    def fake_api(method, **kw):
+        if method == "getUpdates":
+            calls["getUpdates"] += 1
+            return [{"update_id": 10, **press("sub:1")}]
+        return {}
+
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    monkeypatch.setattr(telegram, "send", lambda *a, **k: False)
+    real, boom = telegram.handle_update, {"n": 0}
+
+    def flaky(*a):
+        boom["n"] += 1
+        if boom["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real(*a)
+
+    monkeypatch.setattr(telegram, "handle_update", flaky)
+    pending, fails = {}, {}
+    assert telegram.poll_once(con, cfg, 0, pending, fails) == 10            # failed: offset not advanced
+    assert telegram.poll_once(con, cfg, 10, pending, fails) == 11           # redelivered and handled
+    assert row(con)["submit_status"] == "submitted"
+    monkeypatch.setattr(telegram, "handle_update", lambda *a: (_ for _ in ()).throw(RuntimeError("bad")))
+    off = 11
+    for _ in range(telegram.MAX_TRIES):                                      # a poison update is skipped
+        off = telegram.poll_once(con, cfg, off, pending, fails)
+    assert off == 11 and fails == {}
