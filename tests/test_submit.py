@@ -122,3 +122,14 @@ def test_unconfirmed_without_caption_takes_reel_closest_to_click(cfg, con, tmp_p
                              stats_item("EARLY", 5, ts=click - timedelta(hours=2))]))
     submit.collect(cfg, con, False, f, now=NOW)
     assert con.execute("SELECT ig_shortcode FROM publications").fetchone()[0] == "OURS"
+
+
+def test_48h_baseline_window(con):
+    db.sync_accounts(con, {"accounts": [{"nick": "acc1"}]})
+    add_pub(con, "AAA", 5, last_views=80_000)
+    con.execute("INSERT INTO view_snapshots VALUES (1, ?, 10000, 0)", (db.iso(NOW - timedelta(hours=72)),))
+    con.commit()
+    assert submit.views_48h_ago(con, 1, NOW) is None             # 72 h old: not a 48 h baseline
+    con.execute("INSERT INTO view_snapshots VALUES (1, ?, 79000, 0)", (db.iso(NOW - timedelta(hours=47)),))
+    con.commit()
+    assert submit.views_48h_ago(con, 1, NOW) == 79000
