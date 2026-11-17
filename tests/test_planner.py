@@ -123,3 +123,15 @@ def test_repost_of_a_flop_goes_to_another_account(cfg, con, world):
     planner.plan(cfg, con, False, now=now, rng=random.Random(1))
     new = [r for r in pubs(con) if r["attempt"] == 2]
     assert len(new) == 1 and new[0]["account"] == "acc2"              # never the same account again
+
+
+def test_source_with_failed_publication_gets_next_attempt(cfg, con, world):
+    add_sources, add_captions, now = world
+    add_sources(1)
+    add_captions(5)
+    con.execute("INSERT INTO publications (source_id, account, attempt, state, scheduled_at, created_at) "
+                "VALUES (1, 'acc1', 1, 'failed', 'x', 'x')")
+    con.commit()
+    planner.plan(cfg, con, False, now=now, rng=random.Random(1))
+    retry = [r for r in pubs(con) if r["state"] != "failed"]
+    assert len(retry) == 1 and retry[0]["attempt"] == 2          # not stuck on UNIQUE(source_id, attempt)
