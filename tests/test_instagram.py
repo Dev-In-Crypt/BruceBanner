@@ -195,3 +195,14 @@ def test_action_block_pauses_account(cfg, con, fake_ig):
     assert (acc["status"], acc["status_reason"]) == ("paused", "action_block") and acc["paused_until"]
     assert site["shared"] is None
     assert instagram.publish_one(cfg, con, {"id": 99, "file_path": str(built), "caption": "x"}, account) == "skipped"
+
+
+def test_missing_file_marks_failed(cfg, con):
+    account = {**cfg["accounts"][0], "nick": "acc1"}
+    db.sync_accounts(con, {"accounts": [account]})
+    con.execute("INSERT INTO publications (account, state, scheduled_at, file_path, created_at) "
+                "VALUES ('acc1', 'built', 'x', '/nonexistent.mp4', 'x')")
+    con.commit()
+    pub = dict(con.execute("SELECT * FROM publications").fetchone())
+    assert instagram.publish_one(cfg, con, pub, account) == "failed"
+    assert con.execute("SELECT state, error FROM publications").fetchone()[1].startswith("invalid file")

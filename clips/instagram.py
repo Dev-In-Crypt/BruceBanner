@@ -278,7 +278,10 @@ def publish_one(cfg, con, pub: dict, account: dict, dry=False) -> str:
     if db_status(con, nick) != "active":
         log.info("pub=%s account=%s not active, skipped", pid, nick)
         return "skipped"
-    problems = video.validate(pub["file_path"], cfg, video.probe(pub["file_path"])["duration"])  # H4
+    try:  # H4: never publish an invalid file; a missing or corrupt file is a failure, not a retry
+        problems = video.validate(pub["file_path"], cfg, video.probe(pub["file_path"])["duration"])
+    except Exception as e:  # noqa: BLE001
+        problems = [f"{type(e).__name__}: {str(e)[:200]}"]
     if problems:
         return _set(con, pid, dry, state="failed", error="invalid file: " + "; ".join(problems))
     clicked = {"at": None}
