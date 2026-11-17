@@ -152,3 +152,12 @@ def test_missing_reel_warning_retried_until_delivered(cfg, con, tmp_path, sent):
     n = len(sent)
     submit.collect(cfg, con, False, f, now=NOW)                  # delivered once: no repeats
     assert len(sent) == n
+
+
+def test_reel_without_view_count_is_not_reported_missing(cfg, con, tmp_path, sent):
+    db.sync_accounts(con, {"accounts": [{"nick": "acc1"}]})
+    add_pub(con, "AAA", 2, last_views=60_000, submit_status="candidate")
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps([{**stats_item("AAA", 0), "videoPlayCount": None, "videoViewCount": None}]))
+    submit.collect(cfg, con, False, f, now=NOW)
+    assert sent == [] and con.execute("SELECT error FROM publications").fetchone()[0] is None
