@@ -31,10 +31,21 @@ def test_decide():
     assert d(60_000, 22, 59_000, "active", P) == ("expired", None)
 
 
+class Sent(list):
+    pass
+
+
 @pytest.fixture
 def sent(monkeypatch):
-    out = []
-    monkeypatch.setattr(telegram, "send", lambda text, buttons=None, photo=None, dry=False: out.append((text, buttons)))
+    out = Sent()
+    state = {"ok": True}
+
+    def fake_send(text, buttons=None, photo=None, dry=False):
+        out.append((text, buttons))
+        return state["ok"]
+
+    monkeypatch.setattr(telegram, "send", fake_send)
+    out.state = state
     return out
 
 
@@ -84,3 +95,30 @@ def test_account_in_danger_triggers_submit(cfg, con, sent):
     add_pub(con, "AAA", 2, last_views=60_000)
     db.set_account_status(con, "acc1", "check", "checkpoint")
     assert submit.run_submit_check(cfg, con, False, now=NOW, nick="acc1") == [(1, "submit_now", "account_in_danger")]
+
+
+def test_undelivered_alert_is_retried(cfg, con, sent):
+    db.sync_accounts(con, {"accounts": [{"nick": "acc1"}]})
+    add_pub(con, "AAA", 5, last_views=80_000)
+    con.execute("INSERT INTO view_snapshots VALUES (1, ?, 79000, 0)", (db.iso(NOW - timedelta(hours=47)),))
+    con.commit()
+    sent.state["ok"] = False                                     # Telegram down
+    submit.run_submit_check(cfg, con, False, now=NOW)
+    assert con.execute("SELECT notified_at FROM publications").fetchone()[0] is None
+    sent.state["ok"] = True                                      # Telegram back: the alert goes out once
+    submit.run_submit_check(cfg, con, False, now=NOW + timedelta(days=1))
+    submit.run_submit_check(cfg, con, False, now=NOW + timedelta(days=2))
+    assert len(sent) == 2 and con.execute("SELECT notified_at FROM publications").fetchone()[0]
+    assert con.execute("SELECT submit_reason FROM publications").fetchone()[0] == "stalled"   # decision kept
+
+
+def test_unconfirmed_without_caption_takes_reel_closest_to_click(cfg, con, tmp_path, sent):
+    db.sync_accounts(con, {"accounts": [{"nick": "acc1"}]})
+    click = NOW - timedelta(hours=5)
+    add_pub(con, None, 0, state="unconfirmed", caption="", share_clicked_at=db.iso(click), ig_url=None)
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps([stats_item("LATER", 5, ts=NOW),                         # a later post: not ours
+                             stats_item("OURS", 5, ts=click + timedelta(minutes=3)),
+                             stats_item("EARLY", 5, ts=click - timedelta(hours=2))]))
+    submit.collect(cfg, con, False, f, now=NOW)
+    assert con.execute("SELECT ig_shortcode FROM publications").fetchone()[0] == "OURS"
