@@ -186,5 +186,7 @@ def run_submit_check(cfg, con, dry, now=None, nick=None) -> list:
 
 
 def run_stats(cfg, con, dry, from_file=None):
+    from clips import notion
     collect(cfg, con, dry, from_file)
     run_submit_check(cfg, con, dry)
+    notion.sync(cfg, con, dry)  # skipped when Notion is not configured

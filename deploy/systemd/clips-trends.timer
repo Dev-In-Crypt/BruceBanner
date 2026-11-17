@@ -1,0 +1,10 @@
+[Unit]
+Description=clips trends (every 3 hours)
+
+[Timer]
+OnCalendar=*-*-* 00/3:15:00
+Persistent=true
+Unit=clips@trends.service
+
+[Install]
+WantedBy=timers.target

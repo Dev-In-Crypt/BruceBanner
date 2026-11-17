@@ -1,0 +1,10 @@
+[Unit]
+Description=clips stats (daily)
+
+[Timer]
+OnCalendar=*-*-* 06:20:00 Europe/Moscow
+Persistent=true
+Unit=clips@stats.service
+
+[Install]
+WantedBy=timers.target

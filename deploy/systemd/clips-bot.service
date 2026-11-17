@@ -1,0 +1,16 @@
+[Unit]
+Description=clips Telegram bot for the operator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clips
+WorkingDirectory=/opt/clips
+EnvironmentFile=/opt/clips/.env
+ExecStart=/opt/clips/.venv/bin/python -m clips bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=AdsPower headless client (Local API on port 50325)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=clips
+EnvironmentFile=/opt/clips/.env
+# Check the binary path after installing the AdsPower .deb:  dpkg -L adspower-global | grep -i bin
+# If the client refuses to start without a display, keep xvfb-run; otherwise it can be removed.
+ExecStart=/usr/bin/xvfb-run -a "/opt/AdsPower Global/adspower_global" --headless=true --api-key=${ADSPOWER_API_KEY} --api-port=50325
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

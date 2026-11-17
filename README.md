@@ -7,7 +7,8 @@ operator in Telegram when to submit each reel to the Playerok bot.
 
 - Plan for the AI coder: [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 - Owner's spec (Russian): [docs/spec-ru.md](docs/spec-ru.md)
-- Status: Phase 0 (bootstrap) and Phase 1 (video build) done.
+- Operator and admin runbook (Russian): [docs/RUNBOOK.md](docs/RUNBOOK.md)
+- Status: all code phases (0-5) and deployment files (6) are written; live checks and the pilot are next.
 
 ## Install (Ubuntu 24.04)
 
@@ -32,3 +33,8 @@ Do not run `playwright install`: the pipeline connects to AdsPower's browser, no
 ```
 
 Every command accepts `--dry-run` (no DB writes, no posting, no messages).
+
+## Server (systemd)
+
+Units and timers are in `deploy/systemd/`, log limits in `deploy/journald.conf.d/`.
+Install steps and the schedule: [docs/RUNBOOK.md](docs/RUNBOOK.md), section 0.

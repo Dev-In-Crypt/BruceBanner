@@ -1,0 +1,10 @@
+[Unit]
+Description=clips summary (daily)
+
+[Timer]
+OnCalendar=*-*-* 09:40:00 Europe/Moscow
+Persistent=true
+Unit=clips@summary.service
+
+[Install]
+WantedBy=timers.target

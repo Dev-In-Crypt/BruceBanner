@@ -1,0 +1,12 @@
+[Unit]
+Description=clips %i
+After=network-online.target adspower.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=clips
+WorkingDirectory=/opt/clips
+EnvironmentFile=/opt/clips/.env
+ExecStart=/opt/clips/.venv/bin/python -m clips %i
+TimeoutStartSec=3h
