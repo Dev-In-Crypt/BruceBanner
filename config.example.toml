@@ -1,0 +1,162 @@
+timezone = "Europe/Moscow"
+data_dir = "data"                       # relative to repo root, or absolute
+
+[playerok]
+rate_static_rub_per_100k = 400
+rate_voiced_rub_per_100k = 700
+min_paid_views = 50000
+step_views = 50000
+max_payout_rub = 10000
+deadline_days = 21                      # counted from publication time (owner: confirm the reference point)
+submit_by_day = 19
+stall_growth_pct_48h = 5.0
+screen_recording_views = 500000
+wait_for_next_step = true               # stalled but projected to cross next 50k step within 48 h -> wait
+
+[banners]
+top = "assets/banners/top.png"          # transparent PNG sticker (or MP4/MOV, looped). Nov 2026: GTA VI banner
+top_y = 280                             # px from top edge; below Instagram's own header (section 1.1)
+top_height_px = 360                     # banner is scaled to this height, width keeps aspect, centered
+top_min_height_px = 320                 # >= 1920/6, never lower
+midroll = "assets/banners/voiced.mp4"   # voiced banner animation; must have an audio stream; "" disables
+midroll_has_alpha = false               # true if midroll is a VP9 WebM with transparency
+midroll_box = { x = 0, y = 660, w = 1080 }   # where the animation is drawn on the frozen frame; height keeps aspect
+midroll_min_source_sec = 12
+midroll_short_until_sec = 20
+midroll_short_insert_sec = 10           # clamped to <= duration - 3 (10 also satisfies the 10-20 s rule)
+midroll_long_window_sec = [10, 20]
+midroll_long_insert_sec = 12
+
+[compose]
+width = 1080
+height = 1920
+fps = 30
+circle_diameter = 940
+circle_center_y = 1160
+circle_border_px = 3                    # thin ring around the circle, 0 disables
+circle_border_color = "#FFFFFF"
+crf = 20
+preset = "medium"
+audio_bitrate = "128k"
+max_file_mb = 100
+font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+text_overlay = false                    # optional text plate (spec module 7, optional)
+text_y = 1660                           # below the circle
+text_size = 56
+banner_check_max_diff = 8.0             # mean abs pixel diff (0-255) between banner and its area in the reel
+
+[trends]
+donors = ["donor_one", "donor_two"]
+blocked_donors = []
+fresh_days = 3                          # Apify onlyPostsNewerThan for regular fetches
+seed_results = 30                       # reels fetched for a donor with too little history
+results_per_donor = 15
+max_age_hours = 48
+min_views = 100000
+views_to_median_ratio = 2.0
+median_window = 30                      # last N mature reels of the donor
+min_donor_samples = 8
+min_duration_sec = 5
+max_duration_sec = 90
+
+[filter]
+# Python regexes, matched against caption lowercased with "ё" replaced by "е". Starter list: tune it.
+blocked_patterns = [
+  # crime, gangs
+  '\bубий', '\bубив', '\bограб', '\bграбеж', '\bтюрьм', '\bзэк', '\bбандит', '\bбанд[аыу]\b', '\bауе\b', '\bкримин', '\bтеррор', '\bстрельб',
+  # war, military
+  '\bвойн[аыуе]\b', '\bвоенн', '\bсво\b', '\bвсу\b', '\bфронт', '\bарми[яи]', '\bмобилиз', '\bракет',
+  # politics
+  '\bпутин', '\bзеленск', '\bнавальн', '\bпрезидент', '\bвыбор[ыа]\b', '\bполитик', '\bгосдум', '\bмитинг', '\bсанкци', '\bтрамп', '\bкремл', '\bукраин',
+  # drugs
+  '\bнарко', '\bзакладк', '\bкокаин', '\bгероин', '\bмарихуан', '\bспайс', '\bмеф\b', '\bупорот', '\bобдолб',
+  # swearing
+  '\bху[йяеи]', '\bпизд', '\bеба', '\bебл', '\bеб[уи]', '\bвыеб', '\bзаеб', '\bуеб', '\bбля', '\bсук[аи]\b', '\bмудак', '\bмудил', '\bзалуп', '\bпид[оа]р', '\bгандон', '\bшлюх',
+  # discrimination
+  '\bхач(и|ик|ей|ам)?\b', '\bчурк', '\bнигг', '\bжид(ы|ов|овск\w*)?\b', '\bхохл', '\bкацап', '\bмоскал',
+  # religion
+  '\bбог\b', '\bаллах', '\bиисус', '\bхрист', '\bцерк', '\bмечет', '\bислам', '\bправослав', '\bмусульм', '\bрелиги', '\bмолитв',
+  # Japanese (for our own caption pool; plain substrings, Japanese has no word boundaries)
+  '政治', '選挙', '首相', '大統領', '戦争', '軍隊', '兵器', '犯罪', '殺人', '暴力', 'ヤクザ', '暴力団',
+  '麻薬', '大麻', 'ドラッグ', '差別', '宗教', '神社', '寺院', '教会', '祈り',
+]
+
+[dedup]
+frames = 5
+max_distance = 10                       # mean Hamming distance (bits of 64) to count as duplicate
+
+[download]
+proxy = ""                              # optional proxy for anonymous downloads; never an account proxy
+
+[planner]
+window_start = "10:00"                  # local time
+window_end = "22:00"
+min_gap_minutes = 120                   # between posts of one account
+lead_minutes = 15                       # do not schedule sooner than now + this
+max_source_age_hours = 96               # do not publish memes older than this
+cross_account_gap_days = 14             # same source never on two accounts within N days
+repost_after_days = 7
+repost_max_views = 50000                # only sources whose every publication got fewer views
+max_reposts = 1
+
+[publish]
+max_per_run = 3
+max_delay_hours = 6                     # a slot older than this is failed instead of published late
+pause_sec = [1.5, 4.0]                  # random pause between UI actions
+typing_delay_ms = [40, 120]
+warmup_sec = [5, 15]                    # scroll the feed before posting
+between_accounts_sec = [30, 90]
+upload_timeout_sec = 300
+action_block_pause_hours = 48
+
+[adspower]
+base_url = "http://127.0.0.1:50325"
+headless_browser = true
+request_interval_sec = 1.1              # AdsPower limits some endpoints to 1 request/second
+
+[apify]
+actor = "apify~instagram-reel-scraper"
+views_field = "videoPlayCount"          # verify against the Instagram app in Task 4.1
+run_timeout_sec = 900
+stats_results_per_account = 100
+
+[notion]
+version = "2022-06-28"
+
+[maintenance]
+keep_source_days = 30
+keep_debug_days = 14                    # screenshots, raw Apify dumps
+keep_backups = 14
+min_free_disk_gb = 10
+
+[captions]
+# Popular accounts whose post captions we copy. Approved by the owner 16.11.2026 (existence checked on
+# HypeAuditor / Social Blade / official sites; first Apify run confirms they are active and Japanese).
+donors_japanese = [
+  "disneyjp", "netflixjp", "tokyodisneyresort_official",   # cinema, entertainment
+  "voguejapan", "vivi_mag_official",                       # fashion
+  "visitjapanjp",                                          # travel
+  "kurashiru", "delishkitchen.tv",                         # food
+  "onepiece_staff",                                        # anime (ONE PIECE staff account)
+  # unverified, add after a manual check: "nationalpark_japan", "nihonryokan", "elle_japan"
+]
+donors_russian = []                     # owner decision: no Russian caption donors, so no account may use "russian"
+results_per_donor = 30
+fresh_days = 60
+min_likes = 1000                        # only popular posts; hidden likes (-1) count as passing
+keep_hashtags = true
+min_chars = 15
+bio_max_chars = 150                     # Instagram bio limit
+low_pool_alert = 50                     # per language: daily summary warns below this many free captions
+# Removed from the first line of a caption; a bio must not contain any of them anywhere (H10).
+# The caption donor's own username and display name are always added to this list.
+brand_words = ["公式", "official", "オフィシャル", "®", "™", "Disney", "ディズニー", "Pixar", "ピクサー",
+               "Marvel", "マーベル", "Star Wars", "スター・ウォーズ", "Netflix", "ネットフリックス"]
+
+[[accounts]]
+nick = "example_account"
+adspower_id = "jabc123"                 # AdsPower profile user_id
+background = "assets/backgrounds/example_account.jpg"
+daily_limit = 1
+caption_lang = "japanese"               # japanese | russian | none (post captions and bio)
+overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)
