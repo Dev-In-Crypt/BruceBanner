@@ -74,3 +74,18 @@ def test_summary(cfg, con):
     db.set_account_status(con, "acc2", "check", "checkpoint")
     text = reports.summary_text(con, cfg)
     assert "активны 1" in text and "проверка 1 (@acc2)" in text and "Свободных подписей: ⚠️ japanese 0" in text
+
+
+def test_token_never_in_error(monkeypatch):
+    import requests
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:SECRET")
+
+    def boom(url, **kw):
+        raise requests.ConnectionError(f"failed for url: {url}")
+
+    monkeypatch.setattr(requests, "post", boom)
+    with pytest.raises(telegram.TelegramError) as e:
+        telegram._api("getMe")
+    assert "SECRET" not in str(e.value) and "***" in str(e.value)
+    monkeypatch.setenv("TELEGRAM_OPERATOR_IDS", "1")
+    assert telegram.send("x") is False                          # failure reported, not raised
