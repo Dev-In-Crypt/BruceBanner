@@ -229,3 +229,12 @@ def test_set_bio_reserves_and_saves(cfg, con, fake_ig):
     assert con.execute("SELECT bio_set_at FROM accounts WHERE nick='acc1'").fetchone()[0]
     with pytest.raises(SystemExit, match="already set"):
         instagram.run_set_bio(cfg, con, account, force=False, dry=False)
+def test_missing_file_marks_failed(cfg, con):
+    account = {**cfg["accounts"][0], "nick": "acc1"}
+    db.sync_accounts(con, {"accounts": [account]})
+    con.execute("INSERT INTO publications (account, state, scheduled_at, file_path, created_at) "
+                "VALUES ('acc1', 'built', 'x', '/nonexistent.mp4', 'x')")
+    con.commit()
+    pub = dict(con.execute("SELECT * FROM publications").fetchone())
+    assert instagram.publish_one(cfg, con, pub, account) == "failed"
+    assert con.execute("SELECT state, error FROM publications").fetchone()[1].startswith("invalid file")
