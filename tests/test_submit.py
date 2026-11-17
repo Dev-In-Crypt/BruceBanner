@@ -133,3 +133,22 @@ def test_48h_baseline_window(con):
     con.execute("INSERT INTO view_snapshots VALUES (1, ?, 79000, 0)", (db.iso(NOW - timedelta(hours=47)),))
     con.commit()
     assert submit.views_48h_ago(con, 1, NOW) == 79000
+
+
+def test_missing_reel_warning_retried_until_delivered(cfg, con, tmp_path, sent):
+    db.sync_accounts(con, {"accounts": [{"nick": "acc1"}]})
+    add_pub(con, "GONE", 2, last_views=60_000, submit_status="candidate")
+    click = NOW - timedelta(hours=60)
+    add_pub(con, None, 3, state="unconfirmed", share_clicked_at=db.iso(click), ig_url=None)
+    f = tmp_path / "s.json"
+    f.write_text("[]")
+    sent.state["ok"] = False
+    submit.collect(cfg, con, False, f, now=NOW)
+    assert [r[0] for r in con.execute("SELECT error FROM publications ORDER BY id")] == [None, None]
+    sent.state["ok"] = True
+    submit.collect(cfg, con, False, f, now=NOW)
+    assert [r[0] for r in con.execute("SELECT error FROM publications ORDER BY id")] == \
+        ["missing_in_stats", "unconfirmed_alerted"]
+    n = len(sent)
+    submit.collect(cfg, con, False, f, now=NOW)                  # delivered once: no repeats
+    assert len(sent) == n

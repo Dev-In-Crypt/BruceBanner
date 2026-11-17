@@ -128,8 +128,8 @@ def resolve_unconfirmed(cfg, con, items, dry, now) -> int:
             break
         else:
             if clicked and now - clicked > timedelta(hours=48) and pub["error"] != "unconfirmed_alerted":
-                telegram.send(f"Не найден рилс pub#{pub['id']} @{pub['account']}, проверьте вручную", dry=dry)
-                if not dry:
+                sent = telegram.send(f"Не найден рилс pub#{pub['id']} @{pub['account']}, проверьте вручную", dry=dry)
+                if sent and not dry:  # mark only when delivered, otherwise retry next run
                     with con:
                         con.execute("UPDATE publications SET error = 'unconfirmed_alerted' WHERE id = ?", (pub["id"],))
     return resolved
@@ -143,9 +143,9 @@ def report_missing(con, cfg, seen, dry, now):
             continue
         log.warning("pub=%s %s not in today's stats", pub["id"], pub["ig_url"])
         if pub["submit_status"] in ("candidate", "submit_now") and pub["error"] != "missing_in_stats":
-            telegram.send(f"⚠️ Рилс pub#{pub['id']} @{pub['account']} не найден в статистике "
-                          f"(возможно, удалён Instagram): {pub['ig_url']}", dry=dry)
-            if not dry:
+            sent = telegram.send(f"⚠️ Рилс pub#{pub['id']} @{pub['account']} не найден в статистике "
+                                 f"(возможно, удалён Instagram): {pub['ig_url']}", dry=dry)
+            if sent and not dry:  # mark only when delivered, otherwise retry next run
                 with con:
                     con.execute("UPDATE publications SET error = 'missing_in_stats' WHERE id = ?", (pub["id"],))
 
