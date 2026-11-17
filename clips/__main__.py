@@ -128,6 +128,8 @@ def run_command(args, cfg, con) -> int:
     elif args.command == "submit-check":
         submit.run_submit_check(cfg, con, dry)
     elif args.command == "bot":
+        if dry:
+            raise SystemExit("bot has no --dry-run mode: it must record the operator's answers")
         telegram.run_bot(cfg, con)
     elif args.command == "summary":
         reports.run_summary(cfg, con, dry)

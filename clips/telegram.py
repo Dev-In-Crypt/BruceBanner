@@ -23,27 +23,37 @@ HELP = ("Кнопки под сообщениями: Подано / Одобре
         "/status: сводка\n/geo <номер> <процент>: доля просмотров из России")
 
 
+class TelegramError(Exception):
+    """A Bot API failure with the token already removed from the message."""
+
+
 def _api(method, **kw):
     token = config.secret("TELEGRAM_BOT_TOKEN")
-    r = requests.post(f"https://api.telegram.org/bot{token}/{method}", timeout=60, **kw)
-    r.raise_for_status()
-    return r.json()["result"]
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/{method}", timeout=60, **kw)
+        r.raise_for_status()
+        return r.json()["result"]
+    except (requests.RequestException, ValueError, KeyError) as e:
+        # requests puts the URL, and so the token, into its messages: never let it reach a log
+        raise TelegramError(f"{method}: {type(e).__name__}: {str(e).replace(token, '***')}") from None
 
 
 def operators() -> list[int]:
     return [int(x) for x in os.environ.get("TELEGRAM_OPERATOR_IDS", "").split(",") if x.strip()]
 
 
-def send(text: str, buttons=None, photo: Path | None = None, dry=False):
-    """buttons: list of rows, each row a list of (label, callback_data). Never raises."""
+def send(text: str, buttons=None, photo: Path | None = None, dry=False) -> bool:
+    """buttons: list of rows, each row a list of (label, callback_data). Never raises.
+    Returns True if at least one operator received it (always False in dry-run)."""
     markup = {"inline_keyboard": [[{"text": lbl, "callback_data": d} for lbl, d in row]
                                   for row in buttons]} if buttons else None
     if dry:
         print(f"[telegram dry-run] {text} {buttons or ''} {photo or ''}")
-        return
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        return False
+    if not os.environ.get("TELEGRAM_BOT_TOKEN") or not operators():
         log.warning("ALERT (Telegram not configured): %s", text)
-        return
+        return False
+    delivered = False
     for chat in operators():
         try:
             if photo and Path(photo).exists():
@@ -55,8 +65,10 @@ def send(text: str, buttons=None, photo: Path | None = None, dry=False):
                 _api("sendMessage", json={"chat_id": chat, "text": text[:4096], "parse_mode": "HTML",
                                           "disable_web_page_preview": True,
                                           **({"reply_markup": markup} if markup else {})})
+            delivered = True
         except Exception as e:  # noqa: BLE001  (an alert failure must not stop the pipeline)
             log.warning("telegram send to %s failed: %s; text: %s", chat, e, text)
+    return delivered
 
 
 # ---------- message builders (pure) ----------
@@ -166,7 +178,7 @@ def run_bot(cfg, con):
         try:
             updates = _api("getUpdates", json={"offset": offset, "timeout": 50,
                                                "allowed_updates": ["message", "callback_query"]})
-        except requests.RequestException as e:
+        except TelegramError as e:
             log.warning("getUpdates failed: %s", e)
             time.sleep(5)
             continue

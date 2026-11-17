@@ -97,18 +97,26 @@ def collect(cfg, con, dry, from_file=None, now=None) -> dict:
     return {"items": len(items), "snapshots": n, "resolved": resolved}
 
 
+MATCH_WINDOW = timedelta(hours=1)  # upload + processing time after the Share click
+
+
 def resolve_unconfirmed(cfg, con, items, dry, now) -> int:
     known = {r[0] for r in con.execute("SELECT ig_shortcode FROM publications WHERE ig_shortcode IS NOT NULL")}
     resolved = 0
     for pub in con.execute("SELECT * FROM publications WHERE state = 'unconfirmed'").fetchall():
         clicked = db.parse_iso(pub["share_clicked_at"]) if pub["share_clicked_at"] else None
+        if not clicked:
+            continue  # nothing to anchor the match to
         want = squash(pub["caption"])[:30]
-        for i in items:
-            code, posted = i.get("shortCode"), i.get("timestamp")
-            if (not code or code in known or (i.get("ownerUsername") or "").lower() != pub["account"].lower()
-                    or not posted or (clicked and datetime.fromisoformat(posted) < clicked - timedelta(minutes=10))
-                    or (want and not squash(i.get("caption")).startswith(want))):
-                continue
+        # Only reels posted right around our Share click; with no caption to compare, take the closest one.
+        candidates = sorted((
+            (abs(datetime.fromisoformat(i["timestamp"]) - clicked), i) for i in items
+            if i.get("shortCode") and i["shortCode"] not in known and i.get("timestamp")
+            and (i.get("ownerUsername") or "").lower() == pub["account"].lower()
+            and clicked - timedelta(minutes=10) <= datetime.fromisoformat(i["timestamp"]) <= clicked + MATCH_WINDOW
+            and (not want or squash(i.get("caption")).startswith(want))), key=lambda c: c[0])
+        for _, i in candidates[:1]:
+            code, posted = i["shortCode"], i["timestamp"]
             known.add(code)
             resolved += 1
             if not dry:
@@ -148,13 +156,16 @@ def run_submit_check(cfg, con, dry, now=None, nick=None) -> list:
     rows = con.execute(
         "SELECT p.*, COALESCE(a.status, 'active') AS account_status FROM publications p "
         "LEFT JOIN accounts a ON a.nick = p.account WHERE p.state = 'published' AND p.last_views IS NOT NULL "
-        "AND (p.submit_status IS NULL OR p.submit_status IN ('low','candidate'))"
+        "AND (p.submit_status IS NULL OR p.submit_status IN ('low','candidate')"
+        " OR (p.submit_status = 'submit_now' AND p.notified_at IS NULL))"  # retry an undelivered alert
         + (" AND p.account = ?" if nick else ""), (nick,) if nick else ()).fetchall()
     out = []
     for r in rows:
         age = (now - db.parse_iso(r["published_at"])).total_seconds() / 86400
         before = views_48h_ago(con, r["id"], now)
         status, reason = decide(r["last_views"], age, before, r["account_status"], p)
+        if r["submit_status"] == "submit_now":  # sticky: only the alert is retried, the decision stays
+            status, reason = "submit_now", r["submit_reason"]
         growth = growth_pct(r["last_views"], before)
         rec = int(r["last_views"] >= p["screen_recording_views"])
         out.append((r["id"], status, reason))
@@ -167,8 +178,7 @@ def run_submit_check(cfg, con, dry, now=None, nick=None) -> list:
         if status == "submit_now" and r["notified_at"] is None:
             pub = {**dict(r), "submit_reason": reason, "growth_48h_pct": growth, "needs_screen_recording": rec}
             text, buttons = telegram.msg_submit(pub, cfg)
-            telegram.send(text, buttons, dry=dry)
-            if not dry:
+            if telegram.send(text, buttons, dry=dry) and not dry:  # mark sent only when delivered
                 with con:
                     con.execute("UPDATE publications SET notified_at = ? WHERE id = ?", (db.iso(now), r["id"]))
     return out
