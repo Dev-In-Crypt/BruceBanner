@@ -49,8 +49,9 @@ text_size = 56
 banner_check_max_diff = 8.0             # mean abs pixel diff (0-255) between banner and its area in the reel
 
 [trends]
-donors = ["donor_one", "donor_two"]     # memes (donor_group "memes")
-donors_movies = []                      # Russian film/series cuts (donor_group "movies", addendum 2b)
+# Picked 18.11.2026 from 30 meme pages found by Russian meme hashtags (docs/DONORS.md): typical views 3k-229k
+donors = ["hermesqz", "hu1iganyo", "ramzik.krsk24", "top.leym", "daring_555", "axyennyi_tip", "meme.actually"]
+donors_movies = ["callmeayub_17"]       # Russian film/series cuts (donor_group "movies", addendum 2b)
 voiced_priority = true                  # rank sources of 12 s+ higher: they get the voiced banner (700 vs 400)
 share_weight = true                     # rank by shares/views too, when Apify returns sharesCount
 blocked_donors = []
