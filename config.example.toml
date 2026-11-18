@@ -37,6 +37,7 @@ circle_border_px = 3                    # thin ring around the circle, 0 disable
 circle_border_color = "#FFFFFF"
 square_size = 1080                      # template "square": video cropped to a centered square, black background
 square_top_y = 660                      # below the top banner
+square_text_y = 1770                    # text plate on the square template: in the black margin below the video
 crf = 20
 preset = "medium"
 audio_bitrate = "128k"

@@ -102,6 +102,11 @@ def validate(cfg: dict, check_files=True) -> None:
         errors.append(f"compose.square_top_y must be >= {banner_bottom} (below the top banner)")
     if c["square_size"] > c["width"] or c["square_top_y"] + c["square_size"] > c["height"]:
         errors.append("square does not fit the frame")
+    if c["text_overlay"]:  # the text plate must never cover the video either
+        if c["square_text_y"] < c["square_top_y"] + c["square_size"]:
+            errors.append(f"compose.square_text_y must be >= {c['square_top_y'] + c['square_size']} (below the square)")
+        if c["square_text_y"] + c["text_size"] > c["height"]:
+            errors.append("compose.square_text_y: the text plate does not fit below the square")
     if cfg["playerok"]["submit_by_day"] >= cfg["playerok"]["deadline_days"]:
         errors.append("playerok.submit_by_day must be < deadline_days")
     if cfg["planner"]["window_start"] >= cfg["planner"]["window_end"]:

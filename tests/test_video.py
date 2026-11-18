@@ -123,3 +123,14 @@ def test_build_square_template(cfg, media, tmp_path):
     size, x, y = video.video_box(cfg, "square")
     assert f.getpixel((10, y + size + 50)) == (0, 0, 0) or max(f.getpixel((10, y + size + 50))) < 20  # black below
     assert max(f.getpixel((540, y + size // 2))) > 40                                                  # video inside
+
+
+def test_square_text_plate_is_below_the_video(cfg, media, tmp_path):
+    cfg["compose"]["text_overlay"] = True
+    out = tmp_path / "sqt.mp4"
+    acc = {**cfg["accounts"][0], "template": "square", "background": ""}
+    video.build(media["src8"], acc, cfg, out, text="テスト")
+    size, x, y = video.video_box(cfg, "square")
+    f = video.grab_frame(out, 2)
+    plate = f.crop((0, y + size, 1080, 1920))
+    assert max(hi for _, hi in plate.getextrema()) > 100           # the white text is in the black margin

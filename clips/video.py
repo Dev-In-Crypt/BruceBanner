@@ -130,7 +130,7 @@ def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None,
         txt = Path(workdir or Path(out).parent) / "overlay.txt"
         txt.write_text(text, encoding="utf-8")  # textfile= avoids escaping user text inside the filter
         drawtext = (f",drawtext=fontfile={c['font_file']}:textfile={txt}:fontsize={c['text_size']}:"
-                    f"fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y={c['text_y']}")
+                    f"fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y={c['square_text_y'] if template == 'square' else c['text_y']}")
     graph = (
         f"[0:v]fps={fps},scale={D}:{D}:force_original_aspect_ratio=increase,crop={D}:{D},setsar=1,"
         f"pad={W}:{H}:{X}:{Y}:black[c];"
