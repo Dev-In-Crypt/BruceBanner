@@ -55,8 +55,10 @@ def harvest(cfg, con, dry, from_file=None) -> dict:
     if not dry:
         backfill_topics(cfg, con)
     for lang, topic in pools_in_use(cfg):
-        if from_file:
-            items = json.loads(Path(from_file).read_text(encoding="utf-8"))
+        if from_file:  # a saved dump may mix themes: keep only this theme's donors
+            donors = {d.lower() for d in c[f"donors_{lang}"][topic]}
+            items = [i for i in json.loads(Path(from_file).read_text(encoding="utf-8"))
+                     if (i.get("ownerUsername") or "").lower() in donors]
         else:
             items = trends.run_actor(cfg, {"username": c[f"donors_{lang}"][topic],
                                            "resultsLimit": c["results_per_donor"],

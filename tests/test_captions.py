@@ -48,13 +48,17 @@ def test_bio_reserve_release(con, cfg):
 def test_harvest_from_file(cfg, con, tmp_path):
     import json
     items = [{"ownerUsername": "disneyjp", "ownerFullName": "ディズニー公式", "likesCount": 5000, "caption": EX2, "url": "u1"},
-             {"ownerUsername": "x", "likesCount": 10, "caption": EX1, "url": "u2"},           # not popular
-             {"ownerUsername": "y", "likesCount": -1, "caption": EX1, "url": "u3"}]            # hidden likes: kept
+             {"ownerUsername": "netflixjp", "likesCount": 10, "caption": EX1, "url": "u2"},   # not popular
+             {"ownerUsername": "netflixjp", "likesCount": -1, "caption": EX1, "url": "u3"},   # hidden likes: kept
+             {"ownerUsername": "onepiece_staff", "likesCount": 9000, "caption": "アニメの夜、仲間と一緒に最終回を観ました。",
+              "url": "u4"}]                                                                    # anime donor
     f = tmp_path / "c.json"
     f.write_text(json.dumps(items, ensure_ascii=False))
+    cfg["accounts"] = [{**cfg["accounts"][0], "theme": "cinema"}, {**cfg["accounts"][0], "nick": "b", "theme": "anime"}]
     captions.harvest(cfg, con, False, f)
     captions.harvest(cfg, con, False, f)                                                   # idempotent
-    assert con.execute("SELECT COUNT(*) FROM captions").fetchone()[0] == 2
+    topics = dict(con.execute("SELECT source, topic FROM captions").fetchall())
+    assert topics == {"disneyjp": "cinema", "netflixjp": "cinema", "onepiece_staff": "anime"}  # no cross-theme
 
 
 def test_old_captions_get_theme_of_their_donor(con, cfg):
