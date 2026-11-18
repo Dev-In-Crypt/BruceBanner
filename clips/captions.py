@@ -52,6 +52,8 @@ def pools_in_use(cfg) -> list[tuple[str, str]]:
 def harvest(cfg, con, dry, from_file=None) -> dict:
     """Weekly: copy POST captions of popular accounts (never profile descriptions, H10)."""
     c, stats = cfg["captions"], {}
+    if not dry:
+        backfill_topics(cfg, con)
     for lang, topic in pools_in_use(cfg):
         if from_file:
             items = json.loads(Path(from_file).read_text(encoding="utf-8"))
@@ -79,6 +81,23 @@ def harvest(cfg, con, dry, from_file=None) -> dict:
         stats[f"{lang}/{topic}"] = {"fetched": len(items), "kept": kept, "free": free_count(con, lang, topic)}
     log.info("harvest-captions: %s%s", stats, " (dry-run)" if dry else "")
     return stats
+
+
+def backfill_topics(cfg, con) -> int:
+    """Captions harvested before themes existed have topic '': give them the theme of their donor account."""
+    n = 0
+    for lang in ("japanese", "russian"):
+        for topic, donors in cfg["captions"].get(f"donors_{lang}", {}).items():
+            if not donors:
+                continue
+            marks = ",".join("?" * len(donors))
+            with con:
+                n += con.execute(f"UPDATE captions SET topic = ? WHERE topic = '' AND lang = ? "
+                                 f"AND lower(source) IN ({marks})",
+                                 (topic, lang, *[d.lower() for d in donors])).rowcount
+    if n:
+        log.info("backfilled the theme of %s older captions", n)
+    return n
 
 
 def free_count(con, lang, topic=None) -> int:

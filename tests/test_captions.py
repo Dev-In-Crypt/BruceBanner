@@ -55,3 +55,12 @@ def test_harvest_from_file(cfg, con, tmp_path):
     captions.harvest(cfg, con, False, f)
     captions.harvest(cfg, con, False, f)                                                   # idempotent
     assert con.execute("SELECT COUNT(*) FROM captions").fetchone()[0] == 2
+
+
+def test_old_captions_get_theme_of_their_donor(con, cfg):
+    con.execute("INSERT INTO captions (lang, text, source, fetched_at) VALUES ('japanese', 'アニメの夜', 'OnePiece_Staff', 'x')")
+    con.execute("INSERT INTO captions (lang, text, source, fetched_at) VALUES ('japanese', '知らない', 'someone', 'x')")
+    con.commit()
+    assert captions.backfill_topics(cfg, con) == 1
+    assert dict(con.execute("SELECT text, topic FROM captions").fetchall()) == {"アニメの夜": "anime", "知らない": ""}
+    assert captions.take_caption(con, "japanese", "pub:1", "anime")[1] == "アニメの夜"
