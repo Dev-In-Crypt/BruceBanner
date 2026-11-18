@@ -101,7 +101,8 @@ def fetch(cfg, con, dry, from_file=None) -> int:
                     "INSERT INTO sources (shortcode, donor, url, video_url, caption, views, likes, duration, posted_at,"
                     " fetched_at, donor_group, shares) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(shortcode) DO"
                     " UPDATE SET views=excluded.views, likes=excluded.likes, video_url=excluded.video_url,"
-                    " fetched_at=excluded.fetched_at, shares=COALESCE(excluded.shares, shares)", r)
+                    " fetched_at=excluded.fetched_at, shares=COALESCE(excluded.shares, shares),"
+                    " donor_group=excluded.donor_group", r)  # follows the config if a donor moves lists
                 n += 1
     log.info("fetch: %s items, %s usable%s", len(items), len(rows), " (dry-run, nothing stored)" if dry else "")
     return len(rows)

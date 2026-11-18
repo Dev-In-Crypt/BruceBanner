@@ -108,3 +108,12 @@ def test_fetch_tags_donor_group_and_shares(cfg, con, tmp_path):
     trends.fetch(cfg, con, False, f)
     got = {r[0]: (r[1], r[2]) for r in con.execute("SELECT shortcode, donor_group, shares FROM sources")}
     assert got == {"M1": ("movies", 900), "X1": ("memes", None)}
+
+
+def test_donor_moved_to_movies_updates_its_sources(cfg, con, tmp_path):
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps([item("K1", donor="kino_cuts")]))
+    trends.fetch(cfg, con, False, f)
+    cfg["trends"]["donors_movies"] = ["kino_cuts"]           # owner moves the donor to the film-cut list
+    trends.fetch(cfg, con, False, f)
+    assert con.execute("SELECT donor_group FROM sources WHERE shortcode = 'K1'").fetchone()[0] == "movies"
