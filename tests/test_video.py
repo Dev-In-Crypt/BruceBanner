@@ -112,3 +112,14 @@ def test_failed_rebuild_keeps_previous_file(cfg, media, tmp_path):
     with pytest.raises(ValueError, match="banner"):
         video.build(media["src8"], cfg["accounts"][0], cfg, out)
     assert out.read_bytes() == before and not list(tmp_path.glob("*.part.mp4"))
+
+
+def test_build_square_template(cfg, media, tmp_path):
+    out = tmp_path / "sq.mp4"
+    acc = {**cfg["accounts"][0], "template": "square", "background": ""}
+    meta = video.build(media["src8"], acc, cfg, out)
+    assert meta["template"] == "square" and meta["background"] == "black"
+    f = video.grab_frame(out, 2)
+    size, x, y = video.video_box(cfg, "square")
+    assert f.getpixel((10, y + size + 50)) == (0, 0, 0) or max(f.getpixel((10, y + size + 50))) < 20  # black below
+    assert max(f.getpixel((540, y + size // 2))) > 40                                                  # video inside

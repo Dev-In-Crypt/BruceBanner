@@ -75,9 +75,11 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
 1. В AdsPower создать профиль со своей мобильной или резидентской прокси.
 2. Войти в Instagram в этом профиле вручную. Переключить аккаунт в профессиональный (автор):
    без этого не видна статистика по странам.
-3. Добавить блок `[[accounts]]` в `config.toml`: ник, `adspower_id`, фон, `daily_limit` (начинать с 1),
-   `caption_lang` (`japanese` или `none`).
-4. Положить картинку фона по указанному пути.
+3. Добавить блок `[[accounts]]` в `config.toml`: ник, `adspower_id`, `daily_limit` (начинать с 1),
+   `caption_lang` (`japanese` или `none`), `theme` (тема: `cinema`, `fashion`, `travel`, `food`, `anime`),
+   `template` (`circle` или `square`), `donor_group` (`memes` или `movies`), фон (только для `circle`), `cover`.
+4. Положить картинку фона и обложку (вертикальная 9:16, в теме аккаунта) по указанным путям.
+   Ник и аватар в Instagram выбрать в той же теме (пример: японский фан-аккаунт аниме).
 5. `python -m clips sync-accounts`, `python -m clips health --account <ник>`, `python -m clips set-bio --account <ник>`.
 
 ## 3. Аккаунт на проверке (сообщение 🔴 в Telegram)

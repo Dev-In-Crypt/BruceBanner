@@ -52,19 +52,21 @@ def fresh_sources(con, cfg, now) -> list:
     return con.execute(
         "SELECT s.*, " + MAX_ATTEMPT + " FROM sources s WHERE s.state = 'ready' AND s.posted_at >= ? AND NOT EXISTS "
         "(SELECT 1 FROM publications p WHERE p.source_id = s.id AND p.state != 'failed') ORDER BY s.score DESC",
+        # ponytail: one query for all groups, split in Python; fine at a few hundred ready sources
         (min_posted,)).fetchall()
 
 
-def repost_source(con, cfg, nick, now):
+def repost_source(con, cfg, nick, now, group="memes"):
     """A flop (every post under repost_max_views) that may get another chance on a new account."""
     p = cfg["planner"]
     last_ok = db.iso(now - timedelta(days=max(p["repost_after_days"], p["cross_account_gap_days"])))
     return con.execute(
         "SELECT s.*, " + MAX_ATTEMPT + " FROM sources s "
         "JOIN publications p ON p.source_id = s.id AND p.state != 'failed' WHERE s.state = 'ready' "
+        "AND s.donor_group = ? "
         "GROUP BY s.id HAVING SUM(p.state != 'published' OR p.last_views IS NULL OR p.last_views >= ?) = 0 "
         "AND SUM(p.account = ?) = 0 AND COUNT(*) < ? AND MAX(p.published_at) <= ? ORDER BY s.score DESC LIMIT 1",
-        (p["repost_max_views"], nick, 1 + p["max_reposts"], last_ok)).fetchone()
+        (group, p["repost_max_views"], nick, 1 + p["max_reposts"], last_ok)).fetchone()
 
 
 def plan(cfg, con, dry, now=None, rng=None) -> list[dict]:
@@ -76,7 +78,9 @@ def plan(cfg, con, dry, now=None, rng=None) -> list[dict]:
             telegram.send(f"Аккаунт @{nick} снова активен")
         expire_stale(cfg, con, now)
     lo, hi = day_bounds(now, tz)
-    fresh, planned = list(fresh_sources(con, cfg, now)), []
+    fresh, planned = {}, []  # donor group -> ready sources, best first (addendum 2b)
+    for s in fresh_sources(con, cfg, now):
+        fresh.setdefault(s["donor_group"], []).append(s)
     accounts = [a for a in cfg["accounts"] if instagram_status(con, a["nick"]) == "active"]
     rng.shuffle(accounts)  # the best sources should not always go to the same account
     for a in accounts:
@@ -84,7 +88,8 @@ def plan(cfg, con, dry, now=None, rng=None) -> list[dict]:
                            "AND scheduled_at >= ? AND scheduled_at < ?", (a["nick"], lo, hi)).fetchall()
         existing = [db.parse_iso(r[0]) for r in rows]
         for _ in range(a["daily_limit"] - len(existing)):
-            src = fresh.pop(0) if fresh else repost_source(con, cfg, a["nick"], now)
+            group = a.get("donor_group", "memes")
+            src = fresh[group].pop(0) if fresh.get(group) else repost_source(con, cfg, a["nick"], now, group)
             slot = src and pick_slot(now, now.astimezone(tz).date(), existing, p, tz, rng)
             if not slot:
                 break
@@ -117,7 +122,7 @@ def instagram_status(con, nick) -> str:
 def insert_publication(con, account, source_id, attempt, slot) -> int:
     """One transaction: reserve a caption and insert the publication (a rollback frees the caption)."""
     with con:
-        cap = captions.take_caption(con, account["caption_lang"], "pub:pending")
+        cap = captions.take_caption(con, account["caption_lang"], "pub:pending", account.get("theme", ""))
         if cap is None:
             raise NoCaption
         cid, text = cap
@@ -169,6 +174,7 @@ def build_planned(cfg, con):
             continue
         with con:
             con.execute("UPDATE publications SET state = 'built', file_path = ?, background = ?, banner_type = ?,"
-                        " banner_file = ? WHERE id = ?", (str(out), meta["background"], meta["banner_type"],
-                                                         meta["banner_file"], pub["id"]))
+                        " banner_file = ?, template = ? WHERE id = ?",
+                        (str(out), meta["background"], meta["banner_type"], meta["banner_file"], meta["template"],
+                         pub["id"]))
         log.info("built pub=%s %s (%s)", pub["id"], out.name, meta["banner_type"])

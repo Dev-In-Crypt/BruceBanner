@@ -40,12 +40,12 @@ def summary_text(con, cfg, now=None) -> str:
         lines.append(f"  pub#{r['id']} @{r['account']} {telegram.num(r['last_views'] or 0)} просм., подать до {by:%d.%m}")
     lines.append(f"Кандидаты: {cnt('candidate')} · Поданы, ждут решения: {cnt('submitted')}")
     lines.append(f"Одобрено в этом месяце: {telegram.num(approved)} ₽")
-    langs = captions.languages_in_use(cfg)
-    if langs:
+    pools = captions.pools_in_use(cfg)
+    if pools:
         parts = []
-        for lang in langs:
-            n = captions.free_count(con, lang)
-            parts.append(("⚠️ " if n < cfg["captions"]["low_pool_alert"] else "") + f"{lang} {n}")
+        for lang, topic in pools:
+            n = captions.free_count(con, lang, topic)
+            parts.append(("⚠️ " if n < cfg["captions"]["low_pool_alert"] else "") + f"{lang}/{topic} {n}")
         lines.append("Свободных подписей: " + ", ".join(parts))
     lines.append(f"Свободно на диске: {shutil.disk_usage(cfg['data']).free / 2**30:.0f} ГБ")
     return "\n".join(lines)
@@ -57,8 +57,8 @@ def run_summary(cfg, con, dry):
 
 # ---------- weekly report (Task 5.2) ----------
 
-GROUPS = (("account", "Аккаунты"), ("donor", "Доноры"), ("background", "Фоны"), ("banner_type", "Баннер"),
-          ("caption_lang", "Язык подписи"))
+GROUPS = (("account", "Аккаунты"), ("donor", "Доноры"), ("donor_group", "Тип доноров"), ("background", "Фоны"),
+          ("template", "Шаблон"), ("banner_type", "Баннер"), ("caption_lang", "Язык подписи"))
 
 
 def weekly(con, cfg, now=None) -> str:
@@ -66,7 +66,7 @@ def weekly(con, cfg, now=None) -> str:
     import statistics
     now = now or datetime.now(timezone.utc)
     since, min_paid = db.iso(now - timedelta(days=7)), cfg["playerok"]["min_paid_views"]
-    rows = con.execute("SELECT p.*, s.donor FROM publications p LEFT JOIN sources s ON s.id = p.source_id "
+    rows = con.execute("SELECT p.*, s.donor, s.donor_group FROM publications p LEFT JOIN sources s ON s.id = p.source_id "
                        "WHERE p.published_at >= ?", (since,)).fetchall()
     num = telegram.num
     out = [f"📈 Неделя до {now.astimezone(ZoneInfo(cfg['timezone'])):%d.%m.%Y}"]

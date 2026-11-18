@@ -112,6 +112,21 @@ END;
 
 FMT = "%Y-%m-%dT%H:%M:%SZ"
 
+# Columns added after the first schema (addendum 2). Added to existing databases on connect.
+MIGRATIONS = [
+    ("sources", "donor_group", "TEXT NOT NULL DEFAULT 'memes'"),   # memes | movies
+    ("sources", "shares", "INTEGER"),                               # Apify sharesCount, if available
+    ("captions", "topic", "TEXT NOT NULL DEFAULT ''"),              # account theme the caption belongs to
+    ("publications", "template", "TEXT"),                           # circle | square, for reports
+]
+
+
+def migrate(con) -> None:
+    for table, column, decl in MIGRATIONS:
+        if column not in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    con.commit()
+
 
 def connect(path, readonly=False) -> sqlite3.Connection:
     """Read-only (dry-run) never creates or writes the file: missing DB -> empty in-memory copy."""
@@ -121,6 +136,7 @@ def connect(path, readonly=False) -> sqlite3.Connection:
         else:
             con = sqlite3.connect(":memory:")
             con.executescript(SCHEMA)
+            migrate(con)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA busy_timeout=30000")
         return con
@@ -130,6 +146,7 @@ def connect(path, readonly=False) -> sqlite3.Connection:
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA busy_timeout=30000")
     con.executescript(SCHEMA)
+    migrate(con)
     return con
 
 

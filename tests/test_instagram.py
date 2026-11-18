@@ -93,7 +93,9 @@ HOME = """<html><body><svg aria-label="Home" width=20 height=20></svg>
 <div role="dialog" id="dlg" style="display:none">
   <input type="file" id="file" style="display:none">
   <div id="s1" style="display:none"><div role="button" onclick="step(2)">Next</div></div>
-  <div id="s2" style="display:none"><div role="button" onclick="step(3)">Next</div></div>
+  <div id="s2" style="display:none"><div role="button" id="coverbtn">Select from computer</div>
+    <input type="file" accept="image/*" id="cover" style="display:none">
+    <div role="button" onclick="step(3)">Next</div></div>
   <div id="s3" style="display:none">
     <div contenteditable="true" role="textbox" id="cap" style="min-height:40px"></div>
     <div role="button" id="share">Share</div></div>
@@ -103,6 +105,9 @@ HOME = """<html><body><svg aria-label="Home" width=20 height=20></svg>
 function step(n){ for (const i of [1,2,3]) document.getElementById('s'+i).style.display = i==n?'block':'none'; }
 document.getElementById('create').onclick = () => document.getElementById('dlg').style.display='block';
 document.getElementById('file').onchange = () => step(1);
+document.getElementById('coverbtn').onclick = () => document.getElementById('cover').click();
+document.getElementById('cover').onchange = (e) =>
+  fetch('/__cover', {method:'POST', body: e.target.files[0].name});
 document.getElementById('share').onclick = async () => {
   await fetch('/__share', {method:'POST', body: document.getElementById('cap').innerText});
   document.getElementById('s3').style.display='none'; document.getElementById('done').style.display='block'; };
@@ -126,13 +131,16 @@ def chrome_ws(tmp_path):
 @pytest.fixture
 def fake_ig(cfg, con, monkeypatch, chrome_ws, media):
     """AdsPower returns our local Chromium; instagram.com is answered by a fake site."""
-    site = {"shared": None, "home_text": "", "bio": "old bio"}
+    site = {"shared": None, "home_text": "", "bio": "old bio", "cover": None}
     monkeypatch.setattr(adspower, "start", lambda c, pid: chrome_ws)
     monkeypatch.setattr(adspower, "stop", lambda c, pid: None)
 
     def handler(route):
         req, path = route.request, route.request.url.split("instagram.com", 1)[1]
         html = None
+        if path == "/__cover":
+            site["cover"] = req.post_data
+            return route.fulfill(status=200, body="ok")
         if path == "/__share":
             site["shared"] = req.post_data
             return route.fulfill(status=200, body="ok")
@@ -166,7 +174,7 @@ def fake_ig(cfg, con, monkeypatch, chrome_ws, media):
 
     monkeypatch.setattr(instagram, "session", routed)
     cfg["publish"].update(pause_sec=[0, 0], warmup_sec=[0, 0.1], typing_delay_ms=[0, 1], upload_timeout_sec=20)
-    account = {**cfg["accounts"][0], "nick": "acc1", "caption_lang": "japanese"}
+    account = {**cfg["accounts"][0], "nick": "acc1", "caption_lang": "japanese", "cover": ""}
     db.sync_accounts(con, {"accounts": [account]})
     built = cfg["data"] / "build" / "pub_1.mp4"
     video.build(media["src8"], account, cfg, built)
@@ -221,7 +229,7 @@ def test_publish_job_publishes_due_and_respects_gap(cfg, con, fake_ig):
 
 def test_set_bio_reserves_and_saves(cfg, con, fake_ig):
     site, account, built = fake_ig
-    con.execute("INSERT INTO captions (lang, text, fetched_at) VALUES ('japanese', '海辺の朝、静かな時間。 #旅行', 'x')")
+    con.execute("INSERT INTO captions (lang, topic, text, fetched_at) VALUES ('japanese', 'anime', '海辺の朝、静かな時間。 #旅行', 'x')")
     con.commit()
     assert instagram.run_set_bio(cfg, con, account, force=False, dry=False) == "海辺の朝、静かな時間。"
     assert site["bio"] == "海辺の朝、静かな時間。"
@@ -238,3 +246,13 @@ def test_missing_file_marks_failed(cfg, con):
     pub = dict(con.execute("SELECT * FROM publications").fetchone())
     assert instagram.publish_one(cfg, con, pub, account) == "failed"
     assert con.execute("SELECT state, error FROM publications").fetchone()[1].startswith("invalid file")
+
+
+def test_publish_uploads_account_cover(cfg, con, fake_ig, tmp_path):
+    from PIL import Image
+    site, account, built = fake_ig
+    cover = tmp_path / "anime_cover.jpg"
+    Image.new("RGB", (1080, 1920), (200, 50, 50)).save(cover)
+    account = {**account, "cover": str(cover)}
+    assert instagram.run_publish_file(cfg, con, account, built, "static", "朝の散歩。", dry=False) == "published"
+    assert site["cover"] == "anime_cover.jpg"                       # our image, not a frame of the video

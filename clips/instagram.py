@@ -169,7 +169,27 @@ def db_status(con, nick) -> str:
 
 # ---------- publishing (module 10) ----------
 
-def post_reel(page, cfg, nick, file_path, caption, dry, on_share=None) -> None:
+def set_cover(page, cfg, nick, cover) -> bool:
+    """Upload the account's own cover image instead of a video frame (addendum 10b). Returns success."""
+    try:
+        loc = first(page, S.COVER_FILE_INPUT, 3_000, visible=False)
+        loc.set_input_files(str(cover))
+    except LookupError:
+        try:
+            with page.expect_file_chooser(timeout=10_000) as chooser:
+                first(page, S.COVER_FROM_COMPUTER, 10_000).click()
+            chooser.value.set_files(str(cover))
+        except Exception as e:  # noqa: BLE001
+            shot = save_debug(cfg, page, nick, "cover_failed")
+            if cfg["publish"].get("require_cover"):
+                raise
+            log.warning("cover not set for @%s (%s), posting with Instagram's frame; screenshot %s", nick, e, shot)
+            return False
+    page.wait_for_timeout(2000)
+    return True
+
+
+def post_reel(page, cfg, nick, file_path, caption, dry, on_share=None, cover=None) -> None:
     p = cfg["publish"]
 
     def step(name):
@@ -199,6 +219,9 @@ def post_reel(page, cfg, nick, file_path, caption, dry, on_share=None) -> None:
         first(page, S.CROP_ORIGINAL).click()
     first(page, S.NEXT).click()
     pause(cfg)
+    if cover:
+        set_cover(page, cfg, nick, cover)
+        step("cover")
     first(page, S.NEXT).click()
     step("edit")
     if caption:
@@ -296,7 +319,8 @@ def publish_one(cfg, con, pub: dict, account: dict, dry=False) -> str:
     try:
         with session(cfg, account) as page:
             try:
-                post_reel(page, cfg, nick, pub["file_path"], pub["caption"] or "", dry, on_share)
+                post_reel(page, cfg, nick, pub["file_path"], pub["caption"] or "", dry, on_share,
+                          account.get("cover") or None)
             except HealthProblem as e:
                 shot = save_debug(cfg, page, nick, f"health_{e.args[0]}")
                 apply_health(con, cfg, nick, e.args[0], shot, dry)
@@ -442,9 +466,9 @@ def run_set_bio(cfg, con, account, force, dry) -> str:
     if row and row["bio_set_at"] and not force:
         raise SystemExit(f"@{nick} bio already set at {row['bio_set_at']} (use --force)")
     if dry:
-        pick = next(captions.bio_candidates(con, cfg, lang), None)
+        pick = next(captions.bio_candidates(con, cfg, lang, account["theme"]), None)
     else:
-        pick = captions.reserve_bio(con, cfg, lang, nick)
+        pick = captions.reserve_bio(con, cfg, lang, nick, account["theme"])
     if not pick:
         raise SystemExit(f"no free {lang} caption usable as a bio: run harvest-captions")
     cid, bio = pick

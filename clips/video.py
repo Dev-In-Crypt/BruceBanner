@@ -50,10 +50,30 @@ def region_diff(a, b, box=None, mask=None) -> float:
 
 # ---------- layout ----------
 
-def make_frame_png(background, cfg, out_path):
-    """Background with a transparent circle where the video shows through, plus a thin ring."""
+def video_box(cfg, template) -> tuple[int, int, int]:
+    """(size, x, y) of the square area the source video is cropped into, for both templates."""
     c = cfg["compose"]
-    W, H, D, cy = c["width"], c["height"], c["circle_diameter"], c["circle_center_y"]
+    if template == "square":
+        return c["square_size"], (c["width"] - c["square_size"]) // 2, c["square_top_y"]
+    d = c["circle_diameter"]
+    return d, (c["width"] - d) // 2, c["circle_center_y"] - d // 2
+
+
+def make_frame_png(background, cfg, out_path, template="circle"):
+    """Frame drawn over the video: a transparent hole where the video shows through.
+
+    circle: account background with a round hole and a thin ring (spec module 7).
+    square: plain black with a square hole (addendum 7b, for horizontal film/series cuts).
+    """
+    c = cfg["compose"]
+    W, H = c["width"], c["height"]
+    if template == "square":
+        size, x, y = video_box(cfg, "square")
+        frame = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+        ImageDraw.Draw(frame).rectangle([x, y, x + size - 1, y + size - 1], fill=(0, 0, 0, 0))
+        frame.save(out_path)
+        return
+    D, cy = c["circle_diameter"], c["circle_center_y"]
     bg = ImageOps.fit(Image.open(background).convert("RGBA"), (W, H))
     s = 4  # supersampling for smooth edges
     box = [(W - D) // 2 * s, (cy - D // 2) * s, (W + D) // 2 * s, (cy + D // 2) * s]
@@ -91,10 +111,11 @@ def banner_x(cfg, bw) -> int:
     return (cfg["compose"]["width"] - bw) // 2
 
 
-def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None):
-    """Background + video in a circle + top banner sticker (+ optional text plate). One ffmpeg call."""
+def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None, template="circle"):
+    """Frame + video in a circle or square + top banner sticker (+ optional text plate). One ffmpeg call."""
     c, b = cfg["compose"], cfg["banners"]
-    W, H, D, CY, fps = c["width"], c["height"], c["circle_diameter"], c["circle_center_y"], c["fps"]
+    W, H, fps = c["width"], c["height"], c["fps"]
+    D, X, Y = video_box(cfg, template)
     info = probe(src)
     dur = info["duration"]
     bw, bh = banner_size(cfg)
@@ -112,7 +133,7 @@ def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None)
                     f"fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20:x=(w-text_w)/2:y={c['text_y']}")
     graph = (
         f"[0:v]fps={fps},scale={D}:{D}:force_original_aspect_ratio=increase,crop={D}:{D},setsar=1,"
-        f"pad={W}:{H}:{(W - D) // 2}:{CY - D // 2}:black[c];"
+        f"pad={W}:{H}:{X}:{Y}:black[c];"
         f"[c][1:v]overlay=0:0:shortest=1[f];"
         f"[2:v]fps={fps},scale={bw}:{bh}[b];"
         f"[f][b]overlay={banner_x(cfg, bw)}:{b['top_y']}:shortest=1{drawtext},format=yuv420p[v];"
@@ -229,13 +250,14 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
         frame = Path(tmp) / "frame.png"
-        make_frame_png(account["background"], cfg, frame)
+        template = account.get("template", "circle")
+        make_frame_png(account.get("background"), cfg, frame, template)
         m = 0.0
         if t is None:
-            dur = compose_base(src, frame, cfg, part, c["crf"], c["preset"], text, tmp)
+            dur = compose_base(src, frame, cfg, part, c["crf"], c["preset"], text, tmp, template)
         else:
             base = Path(tmp) / "base.mp4"  # high-quality intermediate, re-encoded once more below
-            dur = compose_base(src, frame, cfg, base, 12, "veryfast", text, tmp)
+            dur = compose_base(src, frame, cfg, base, 12, "veryfast", text, tmp, template)
             m = insert_midroll(base, t, cfg, part)
     final = dur + m
     problems = validate(part, cfg, final, (t, t + m) if t is not None else None)
@@ -245,7 +267,8 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
     os.replace(part, out)
     return {"duration": round(final, 3), "midroll_at": t, "midroll_dur": round(m, 3),
             "banner_type": "voiced" if t is not None else "static",
-            "banner_file": Path(b["top"]).name, "background": Path(account["background"]).name}
+            "banner_file": Path(b["top"]).name, "template": template,
+            "background": "black" if template == "square" else Path(account["background"]).name}
 
 
 # ---------- perceptual hash for dedup (module 5) ----------

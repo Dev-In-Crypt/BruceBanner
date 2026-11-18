@@ -32,6 +32,12 @@ SHARE = ['div[role="dialog"] div[role="button"]:text-is("Share")',
          'div[role="dialog"] div[role="button"]:text-is("Поделиться")']
 SHARED_OK = ['text=/reel has been shared/i', 'text=/post has been shared/i',
              'text=/опубликован/i', 'text=/поделились/i']
+# cover (addendum 10b): the step after cropping has "Cover photo" with an upload button
+COVER_FILE_INPUT = ['div[role="dialog"] input[type="file"][accept*="image"]']
+COVER_FROM_COMPUTER = ['div[role="dialog"] div[role="button"]:has-text("Select from computer")',
+                       'div[role="dialog"] button:has-text("Select from computer")',
+                       'div[role="dialog"] div[role="button"]:has-text("Выбрать на компьютере")',
+                       'div[role="dialog"] button:has-text("Выбрать на компьютере")']
 CANCEL_POST = ['div[role="dialog"] button:has-text("Discard")', 'div[role="dialog"] button:has-text("Отменить")']
 REEL_LINK = 'a[href*="/reel/"]'
 
