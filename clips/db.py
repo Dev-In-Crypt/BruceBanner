@@ -121,10 +121,13 @@ MIGRATIONS = [
 ]
 
 
+def missing_columns(con) -> list:
+    return [m for m in MIGRATIONS if m[1] not in {r[1] for r in con.execute(f"PRAGMA table_info({m[0]})")}]
+
+
 def migrate(con) -> None:
-    for table, column, decl in MIGRATIONS:
-        if column not in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
-            con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    for table, column, decl in missing_columns(con):
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     con.commit()
 
 
@@ -133,10 +136,17 @@ def connect(path, readonly=False) -> sqlite3.Connection:
     if readonly:
         if Path(path).exists():
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+            if missing_columns(con):  # older DB: migrate an in-memory copy, never the file
+                mem = sqlite3.connect(":memory:")
+                con.backup(mem)
+                con.close()
+                con = mem
+                migrate(con)
         else:
             con = sqlite3.connect(":memory:")
             con.executescript(SCHEMA)
             migrate(con)
+        con.execute("PRAGMA query_only = ON")  # any write in dry-run fails loudly, copy or not
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA busy_timeout=30000")
         return con

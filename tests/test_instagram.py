@@ -256,3 +256,24 @@ def test_publish_uploads_account_cover(cfg, con, fake_ig, tmp_path):
     account = {**account, "cover": str(cover)}
     assert instagram.run_publish_file(cfg, con, account, built, "static", "朝の散歩。", dry=False) == "published"
     assert site["cover"] == "anime_cover.jpg"                       # our image, not a frame of the video
+
+
+def test_cover_upload_failure_falls_back_unless_required(cfg, monkeypatch, tmp_path):
+    class Broken:
+        def set_input_files(self, *a):
+            raise RuntimeError("upload failed")
+
+        def click(self):
+            raise RuntimeError("no button")
+
+    class Page:
+        def expect_file_chooser(self, timeout=0):
+            from contextlib import nullcontext
+            return nullcontext()
+
+    monkeypatch.setattr(instagram, "first", lambda *a, **k: Broken())
+    monkeypatch.setattr(instagram, "save_debug", lambda *a, **k: None)
+    assert instagram.set_cover(Page(), cfg, "acc1", tmp_path / "c.jpg") is False   # post continues
+    cfg["publish"]["require_cover"] = True
+    with pytest.raises(RuntimeError):
+        instagram.set_cover(Page(), cfg, "acc1", tmp_path / "c.jpg")

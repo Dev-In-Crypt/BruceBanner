@@ -172,19 +172,18 @@ def db_status(con, nick) -> str:
 def set_cover(page, cfg, nick, cover) -> bool:
     """Upload the account's own cover image instead of a video frame (addendum 10b). Returns success."""
     try:
-        loc = first(page, S.COVER_FILE_INPUT, 3_000, visible=False)
-        loc.set_input_files(str(cover))
-    except LookupError:
         try:
+            first(page, S.COVER_FILE_INPUT, 3_000, visible=False).set_input_files(str(cover))
+        except Exception:  # noqa: BLE001  (no input, or the upload through it failed): try the button
             with page.expect_file_chooser(timeout=10_000) as chooser:
                 first(page, S.COVER_FROM_COMPUTER, 10_000).click()
             chooser.value.set_files(str(cover))
-        except Exception as e:  # noqa: BLE001
-            shot = save_debug(cfg, page, nick, "cover_failed")
-            if cfg["publish"].get("require_cover"):
-                raise
-            log.warning("cover not set for @%s (%s), posting with Instagram's frame; screenshot %s", nick, e, shot)
-            return False
+    except Exception as e:  # noqa: BLE001
+        shot = save_debug(cfg, page, nick, "cover_failed")
+        if cfg["publish"].get("require_cover"):
+            raise
+        log.warning("cover not set for @%s (%s), posting with Instagram's frame; screenshot %s", nick, e, shot)
+        return False
     page.wait_for_timeout(2000)
     return True
 
