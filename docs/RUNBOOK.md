@@ -122,8 +122,14 @@ journalctl -u clips-bot -f                # бот в реальном врем�
 
 ## 8. Восстановить базу из бэкапа
 
+Лучше делать это, когда ничего не публикуется: `systemctl list-units 'clips@*' --state=active` должен быть пустым.
+
 ```bash
-sudo systemctl stop 'clips-*.timer' clips-bot
+sudo systemctl stop 'clips-*.timer' clips-bot   # новые задачи больше не запускаются
+sudo systemctl stop 'clips@*.service'            # останавливает задачу, которая уже идёт (публикация прервётся)
+systemctl list-units 'clips@*' --state=active    # должно быть пусто, иначе подождать и повторить
+# служебные файлы старой базы (режим WAL) удалить, иначе они смешаются с восстановленной копией
+sudo -u clips rm -f /opt/clips/data/clips.db-wal /opt/clips/data/clips.db-shm
 sudo -u clips cp /opt/clips/data/backups/clips-ГГГГММДД.db /opt/clips/data/clips.db
 sudo systemctl start clips-bot && sudo systemctl start clips-trends.timer clips-plan.timer clips-publish.timer \
   clips-stats.timer clips-summary.timer clips-report.timer clips-notion.timer clips-maintenance.timer clips-captions.timer

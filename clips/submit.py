@@ -83,8 +83,9 @@ def collect(cfg, con, dry, from_file=None, now=None) -> dict:
         "SELECT id, ig_shortcode FROM publications WHERE state = 'published' AND ig_shortcode IS NOT NULL")}
     for i in items:
         code, views = i.get("shortCode"), trends.views_of(i, cfg)
+        if code in by_code:
+            seen.add(code)  # the reel exists even when Apify gives no view count this time
         if code in by_code and views is not None:
-            seen.add(code)
             n += 1
             if not dry:
                 with con:
