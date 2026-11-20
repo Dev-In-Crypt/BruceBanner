@@ -61,35 +61,48 @@ def mature_counts(con, cfg) -> dict[str, int]:
         "SELECT donor, COUNT(*) FROM sources WHERE posted_at <= ? GROUP BY donor", (cutoff,))}
 
 
+def donor_groups(cfg) -> dict[str, str]:
+    """donor username (lowercase) -> 'memes' | 'movies' (addendum 2b: film/series cuts are a separate group)."""
+    groups = {d.lower(): "memes" for d in cfg["trends"]["donors"]}
+    groups.update({d.lower(): "movies" for d in cfg["trends"].get("donors_movies", [])})
+    return groups
+
+
 def fetch(cfg, con, dry, from_file=None) -> int:
     t = cfg["trends"]
+    groups = donor_groups(cfg)
     if from_file:
         items = json.loads(Path(from_file).read_text(encoding="utf-8"))
     else:
         blocked = {d.lower() for d in t["blocked_donors"]}
-        donors = [d for d in t["donors"] if d.lower() not in blocked]
+        donors = [d for d in t["donors"] + t.get("donors_movies", []) if d.lower() not in blocked]
+        extra = {"includeSharesCount": True} if cfg["apify"].get("include_shares") else {}
         mature = mature_counts(con, cfg)
         seed = [d for d in donors if mature.get(d.lower(), 0) < t["min_donor_samples"]]  # need history for median
         regular = [d for d in donors if d not in seed]
         items = []
         if seed:
-            items += run_actor(cfg, {"username": seed, "resultsLimit": t["seed_results"], "skipPinnedPosts": True})
+            items += run_actor(cfg, {"username": seed, "resultsLimit": t["seed_results"], "skipPinnedPosts": True,
+                                     **extra})
         if regular:
             items += run_actor(cfg, {"username": regular, "resultsLimit": t["results_per_donor"],
-                                     "onlyPostsNewerThan": f"{t['fresh_days']} days", "skipPinnedPosts": True})
+                                     "onlyPostsNewerThan": f"{t['fresh_days']} days", "skipPinnedPosts": True,
+                                     **extra})
         dump_raw(cfg, "trends", items)
     now, n = db.now_iso(), 0
     rows = [(i["shortCode"], (i.get("ownerUsername") or "").lower(), f"https://www.instagram.com/reel/{i['shortCode']}/",
              i["videoUrl"], i.get("caption"), views_of(i, cfg), i.get("likesCount"), i.get("videoDuration"),
-             ts(i.get("timestamp")), now) for i in items if i.get("shortCode") and i.get("videoUrl")]
+             ts(i.get("timestamp")), now, groups.get((i.get("ownerUsername") or "").lower(), "memes"),
+             i.get("sharesCount")) for i in items if i.get("shortCode") and i.get("videoUrl")]
     if not dry:
         with con:
             for r in rows:
                 con.execute(
                     "INSERT INTO sources (shortcode, donor, url, video_url, caption, views, likes, duration, posted_at,"
-                    " fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(shortcode) DO UPDATE SET"
-                    " views=excluded.views, likes=excluded.likes, video_url=excluded.video_url,"
-                    " fetched_at=excluded.fetched_at", r)
+                    " fetched_at, donor_group, shares) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(shortcode) DO"
+                    " UPDATE SET views=excluded.views, likes=excluded.likes, video_url=excluded.video_url,"
+                    " fetched_at=excluded.fetched_at, shares=COALESCE(excluded.shares, shares),"
+                    " donor_group=excluded.donor_group", r)  # follows the config if a donor moves lists
                 n += 1
     log.info("fetch: %s items, %s usable%s", len(items), len(rows), " (dry-run, nothing stored)" if dry else "")
     return len(rows)
@@ -128,6 +141,26 @@ def donor_median(con, cfg, donor, exclude_id) -> float | None:
     return statistics.median(views) if len(views) >= t["min_donor_samples"] else None
 
 
+def share_median(con, cfg, donor, exclude_id) -> float | None:
+    """Median shares/views of the donor's mature reels (a sign of high retention), if Apify gave shares."""
+    cutoff = db.iso(datetime.now(timezone.utc) - timedelta(hours=cfg["trends"]["max_age_hours"]))
+    rates = [r[0] / r[1] for r in con.execute(
+        "SELECT shares, views FROM sources WHERE donor = ? AND id != ? AND posted_at <= ? AND shares IS NOT NULL "
+        "AND views > 0 ORDER BY posted_at DESC LIMIT ?", (donor, exclude_id, cutoff, cfg["trends"]["median_window"]))]
+    return statistics.median(rates) if len(rates) >= 3 and statistics.median(rates) > 0 else None
+
+
+def rank_score(views, median, duration, shares, share_med, cfg) -> float:
+    """Order in which the planner uses selected sources: views vs donor median, weighted by money and retention."""
+    t, b, p = cfg["trends"], cfg["banners"], cfg["playerok"]
+    score = views / median
+    if t.get("voiced_priority") and b.get("midroll") and duration and duration >= b["midroll_min_source_sec"]:
+        score *= p["rate_voiced_rub_per_100k"] / p["rate_static_rub_per_100k"]  # voiced banner pays 700 vs 400
+    if t.get("share_weight") and shares is not None and views and share_med:
+        score *= min(max(shares / views / share_med, 0.5), 2.0)  # bounded, so shares never dominate views
+    return score
+
+
 def select(cfg, con, dry) -> dict:
     now, counts = datetime.now(timezone.utc), {}
     for s in con.execute("SELECT * FROM sources WHERE state = 'new'").fetchall():
@@ -140,7 +173,8 @@ def select(cfg, con, dry) -> dict:
             median = donor_median(con, cfg, s["donor"], s["id"])
             state, reason = decide(s["views"], age, s["duration"], median, cfg["trends"])
             if state == "selected":
-                score = s["views"] / median
+                score = rank_score(s["views"], median, s["duration"], s["shares"],
+                                   share_median(con, cfg, s["donor"], s["id"]), cfg)
                 log.info("selected %s @%s views=%s median=%s score=%.1f", s["shortcode"], s["donor"],
                          s["views"], median, score)
         counts[state] = counts.get(state, 0) + 1

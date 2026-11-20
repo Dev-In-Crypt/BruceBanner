@@ -73,7 +73,7 @@ def test_summary(cfg, con):
     db.sync_accounts(con, {"accounts": [{"nick": "acc1"}, {"nick": "acc2"}]})
     db.set_account_status(con, "acc2", "check", "checkpoint")
     text = reports.summary_text(con, cfg)
-    assert "активны 1" in text and "проверка 1 (@acc2)" in text and "Свободных подписей: ⚠️ japanese 0" in text
+    assert "активны 1" in text and "проверка 1 (@acc2)" in text and "Свободных подписей: ⚠️ japanese/anime 0" in text
 
 
 def test_token_never_in_error(monkeypatch):

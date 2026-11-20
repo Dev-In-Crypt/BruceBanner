@@ -59,7 +59,7 @@ def test_select_flow(cfg, con, tmp_path):
     assert st["HIT"][0] == "selected" and st["MEH"] == ("new", "wait:below_threshold")
     assert st["OLD"] == ("rejected", "too_old") and st["BAD"][0] == "rejected"
     score = con.execute("SELECT score FROM sources WHERE shortcode='HIT'").fetchone()[0]
-    assert 4 < score < 5
+    assert 8 < score < 9      # views/median ~4.8, x1.75 because a 20 s source gets the voiced banner
 
 
 def test_dhash_same_video_reencoded(media, tmp_path):
@@ -90,3 +90,30 @@ def test_download_dedup(cfg, con, media, tmp_path, monkeypatch):
     st = dict(con.execute("SELECT shortcode, state FROM sources"))
     assert st == {"ORIG": "ready", "REUP": "duplicate", "OTHER": "ready"}
     assert not (cfg["data"] / "sources" / "REUP.mp4").exists()
+
+
+def test_rank_score_prefers_voiced_and_shares(cfg):
+    base = trends.rank_score(300_000, 100_000, 8, None, None, cfg)
+    voiced = trends.rank_score(300_000, 100_000, 20, None, None, cfg)
+    assert base == 3.0 and voiced == 3.0 * 700 / 400                   # 12 s+ gets the voiced banner: worth more
+    shared = trends.rank_score(300_000, 100_000, 8, 6_000, 0.01, cfg)  # 2% shares vs donor 1%: x2 (capped)
+    assert shared == 6.0
+    assert trends.rank_score(300_000, 100_000, 8, 30, 0.01, cfg) == 1.5  # far below: x0.5 floor
+
+
+def test_fetch_tags_donor_group_and_shares(cfg, con, tmp_path):
+    cfg["trends"]["donors_movies"] = ["kino_cuts"]
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps([{**item("M1", donor="kino_cuts"), "sharesCount": 900}, item("X1")]))
+    trends.fetch(cfg, con, False, f)
+    got = {r[0]: (r[1], r[2]) for r in con.execute("SELECT shortcode, donor_group, shares FROM sources")}
+    assert got == {"M1": ("movies", 900), "X1": ("memes", None)}
+
+
+def test_donor_moved_to_movies_updates_its_sources(cfg, con, tmp_path):
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps([item("K1", donor="kino_cuts")]))
+    trends.fetch(cfg, con, False, f)
+    cfg["trends"]["donors_movies"] = ["kino_cuts"]           # owner moves the donor to the film-cut list
+    trends.fetch(cfg, con, False, f)
+    assert con.execute("SELECT donor_group FROM sources WHERE shortcode = 'K1'").fetchone()[0] == "movies"

@@ -37,7 +37,7 @@ def world(cfg, con, monkeypatch, tmp_path):
     def fake_build(src, account, c, out, text=None, use_midroll=True):
         out.write_bytes(b"x")
         return {"duration": 8.0, "midroll_at": None, "midroll_dur": 0, "banner_type": "static",
-                "banner_file": "top.png", "background": "bg.png"}
+                "banner_file": "top.png", "background": "bg.png", "template": account.get("template", "circle")}
 
     monkeypatch.setattr(video, "build", fake_build)
     now = datetime.now(timezone.utc)
@@ -53,7 +53,8 @@ def world(cfg, con, monkeypatch, tmp_path):
 
     def add_captions(n):
         for i in range(n):
-            con.execute("INSERT INTO captions (lang, text, fetched_at) VALUES ('japanese', ?, 'x')", (f"海の朝 {i}",))
+            con.execute("INSERT INTO captions (lang, topic, text, fetched_at) VALUES ('japanese', 'anime', ?, 'x')",
+                        (f"海の朝 {i}",))
         con.commit()
 
     return add_sources, add_captions, local(9).astimezone(timezone.utc)
@@ -135,3 +136,27 @@ def test_source_with_failed_publication_gets_next_attempt(cfg, con, world):
     planner.plan(cfg, con, False, now=now, rng=random.Random(1))
     retry = [r for r in pubs(con) if r["state"] != "failed"]
     assert len(retry) == 1 and retry[0]["attempt"] == 2          # not stuck on UNIQUE(source_id, attempt)
+
+
+def test_accounts_only_get_their_donor_group(cfg, con, world):
+    add_sources, add_captions, now = world
+    add_sources(4)
+    add_captions(5)
+    con.execute("UPDATE sources SET donor_group = 'movies' WHERE id IN (1, 2)")  # best two are film cuts
+    con.commit()
+    cfg["accounts"][1]["donor_group"] = "movies"
+    planner.plan(cfg, con, False, now=now, rng=random.Random(1))
+    got = {r["account"]: r["source_id"] for r in pubs(con)}
+    assert got["acc1"] in (3, 4) and got["acc2"] in (1, 2)
+
+
+def test_captions_follow_account_theme(cfg, con, world):
+    add_sources, add_captions, now = world
+    add_sources(2)
+    con.execute("INSERT INTO captions (lang, topic, text, fetched_at) VALUES ('japanese', 'food', '朝ごはん', 'x')")
+    con.execute("INSERT INTO captions (lang, topic, text, fetched_at) VALUES ('japanese', 'anime', 'アニメの夜', 'x')")
+    con.commit()
+    cfg["accounts"][1]["theme"] = "food"
+    planner.plan(cfg, con, False, now=now, rng=random.Random(1))
+    got = {r["account"]: r["caption"] for r in pubs(con)}
+    assert got == {"acc1": "アニメの夜", "acc2": "朝ごはん"}

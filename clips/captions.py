@@ -44,16 +44,26 @@ def languages_in_use(cfg) -> list[str]:
     return sorted({a["caption_lang"] for a in cfg["accounts"]} - {"none"})
 
 
+def pools_in_use(cfg) -> list[tuple[str, str]]:
+    """(language, theme) pairs some account posts with (addendum 1b: captions follow the account theme)."""
+    return sorted({(a["caption_lang"], a["theme"]) for a in cfg["accounts"] if a["caption_lang"] != "none"})
+
+
 def harvest(cfg, con, dry, from_file=None) -> dict:
     """Weekly: copy POST captions of popular accounts (never profile descriptions, H10)."""
     c, stats = cfg["captions"], {}
-    for lang in languages_in_use(cfg):
-        if from_file:
-            items = json.loads(Path(from_file).read_text(encoding="utf-8"))
+    if not dry:
+        backfill_topics(cfg, con)
+    for lang, topic in pools_in_use(cfg):
+        if from_file:  # a saved dump may mix themes: keep only this theme's donors
+            donors = {d.lower() for d in c[f"donors_{lang}"][topic]}
+            items = [i for i in json.loads(Path(from_file).read_text(encoding="utf-8"))
+                     if (i.get("ownerUsername") or "").lower() in donors]
         else:
-            items = trends.run_actor(cfg, {"username": c[f"donors_{lang}"], "resultsLimit": c["results_per_donor"],
+            items = trends.run_actor(cfg, {"username": c[f"donors_{lang}"][topic],
+                                           "resultsLimit": c["results_per_donor"],
                                            "onlyPostsNewerThan": f"{c['fresh_days']} days", "skipPinnedPosts": False})
-            trends.dump_raw(cfg, f"captions_{lang}", items)
+            trends.dump_raw(cfg, f"captions_{lang}_{topic}", items)
         kept = 0
         for i in items:
             likes = i.get("likesCount")
@@ -66,45 +76,66 @@ def harvest(cfg, con, dry, from_file=None) -> dict:
             kept += 1
             if not dry:
                 with con:
-                    con.execute("INSERT OR IGNORE INTO captions (lang, text, source, source_name, source_url, fetched_at)"
-                                " VALUES (?,?,?,?,?,?)", (lang, text, i.get("ownerUsername"), i.get("ownerFullName"),
-                                                          i.get("url"), db.now_iso()))
-        stats[lang] = {"fetched": len(items), "kept": kept, "free": free_count(con, lang)}
+                    con.execute("INSERT OR IGNORE INTO captions (lang, topic, text, source, source_name, source_url,"
+                                " fetched_at) VALUES (?,?,?,?,?,?,?)", (lang, topic, text, i.get("ownerUsername"),
+                                                                        i.get("ownerFullName"), i.get("url"),
+                                                                        db.now_iso()))
+        stats[f"{lang}/{topic}"] = {"fetched": len(items), "kept": kept, "free": free_count(con, lang, topic)}
     log.info("harvest-captions: %s%s", stats, " (dry-run)" if dry else "")
     return stats
 
 
-def free_count(con, lang) -> int:
-    return con.execute("SELECT COUNT(*) FROM captions WHERE lang = ? AND used_at IS NULL", (lang,)).fetchone()[0]
+def backfill_topics(cfg, con) -> int:
+    """Captions harvested before themes existed have topic '': give them the theme of their donor account."""
+    n = 0
+    for lang in ("japanese", "russian"):
+        for topic, donors in cfg["captions"].get(f"donors_{lang}", {}).items():
+            if not donors:
+                continue
+            marks = ",".join("?" * len(donors))
+            with con:
+                n += con.execute(f"UPDATE captions SET topic = ? WHERE topic = '' AND lang = ? "
+                                 f"AND lower(source) IN ({marks})",
+                                 (topic, lang, *[d.lower() for d in donors])).rowcount
+    if n:
+        log.info("backfilled the theme of %s older captions", n)
+    return n
 
 
-def take_caption(con, lang, used_for) -> tuple[int | None, str] | None:
-    """Reserve a random free caption. ('none' -> (None, '')). None = pool empty for this language."""
+def free_count(con, lang, topic=None) -> int:
+    if topic is None:
+        return con.execute("SELECT COUNT(*) FROM captions WHERE lang = ? AND used_at IS NULL", (lang,)).fetchone()[0]
+    return con.execute("SELECT COUNT(*) FROM captions WHERE lang = ? AND topic = ? AND used_at IS NULL",
+                       (lang, topic)).fetchone()[0]
+
+
+def take_caption(con, lang, used_for, topic="") -> tuple[int | None, str] | None:
+    """Reserve a random free caption of this language and theme. ('none' -> (None, '')). None = pool empty."""
     if lang == "none":
         return None, ""
-    row = con.execute("SELECT id, text FROM captions WHERE lang = ? AND used_at IS NULL "
-                      "ORDER BY random() LIMIT 1", (lang,)).fetchone()
+    row = con.execute("SELECT id, text FROM captions WHERE lang = ? AND topic = ? AND used_at IS NULL "
+                      "ORDER BY random() LIMIT 1", (lang, topic)).fetchone()
     if row is None:
         return None
     cur = con.execute("UPDATE captions SET used_at = ?, used_for = ? WHERE id = ? AND used_at IS NULL",
                       (db.now_iso(), used_for, row["id"]))
-    return (row["id"], row["text"]) if cur.rowcount == 1 else take_caption(con, lang, used_for)
+    return (row["id"], row["text"]) if cur.rowcount == 1 else take_caption(con, lang, used_for, topic)
 
 
-def bio_candidates(con, cfg, lang):
-    """Free captions usable as a bio: short, no hashtags, no brand anywhere (H10)."""
+def bio_candidates(con, cfg, lang, topic=""):
+    """Free captions of the account theme usable as a bio: short, no hashtags, no brand anywhere (H10)."""
     brands = cfg["captions"]["brand_words"]
     for r in con.execute("SELECT id, text, source, source_name FROM captions "
-                         "WHERE lang = ? AND used_at IS NULL ORDER BY random()", (lang,)).fetchall():
+                         "WHERE lang = ? AND topic = ? AND used_at IS NULL ORDER BY random()", (lang, topic)).fetchall():
         bio = re.sub(r"\n{3,}", "\n\n", HASHTAG_RE.sub("", r["text"])).strip()
         if 0 < len(bio) <= cfg["captions"]["bio_max_chars"] and \
                 not has_brand(bio, brands + [r["source"], r["source_name"]]):
             yield r["id"], bio
 
 
-def reserve_bio(con, cfg, lang, nick) -> tuple[int, str] | None:
+def reserve_bio(con, cfg, lang, nick, topic="") -> tuple[int, str] | None:
     """Reserve before the browser starts: the planner takes captions without the browser lock."""
-    for cid, bio in bio_candidates(con, cfg, lang):
+    for cid, bio in bio_candidates(con, cfg, lang, topic):
         with con:
             cur = con.execute("UPDATE captions SET used_at = ?, used_for = ? WHERE id = ? AND used_at IS NULL",
                               (db.now_iso(), f"bio:{nick}", cid))

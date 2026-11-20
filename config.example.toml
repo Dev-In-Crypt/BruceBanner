@@ -35,6 +35,9 @@ circle_diameter = 940
 circle_center_y = 1160
 circle_border_px = 3                    # thin ring around the circle, 0 disables
 circle_border_color = "#FFFFFF"
+square_size = 1080                      # template "square": video cropped to a centered square, black background
+square_top_y = 660                      # below the top banner
+square_text_y = 1770                    # text plate on the square template: in the black margin below the video
 crf = 20
 preset = "medium"
 audio_bitrate = "128k"
@@ -46,7 +49,10 @@ text_size = 56
 banner_check_max_diff = 8.0             # mean abs pixel diff (0-255) between banner and its area in the reel
 
 [trends]
-donors = ["donor_one", "donor_two"]
+donors = ["donor_one", "donor_two"]     # memes (donor_group "memes")
+donors_movies = []                      # Russian film/series cuts (donor_group "movies", addendum 2b)
+voiced_priority = true                  # rank sources of 12 s+ higher: they get the voiced banner (700 vs 400)
+share_weight = true                     # rank by shares/views too, when Apify returns sharesCount
 blocked_donors = []
 fresh_days = 3                          # Apify onlyPostsNewerThan for regular fetches
 seed_results = 30                       # reels fetched for a donor with too little history
@@ -108,6 +114,7 @@ warmup_sec = [5, 15]                    # scroll the feed before posting
 between_accounts_sec = [30, 90]
 upload_timeout_sec = 300
 action_block_pause_hours = 48
+require_cover = false                   # true: a post whose cover upload fails is not published
 
 [adspower]
 base_url = "http://127.0.0.1:50325"
@@ -116,7 +123,8 @@ request_interval_sec = 1.1              # AdsPower limits some endpoints to 1 re
 
 [apify]
 actor = "apify~instagram-reel-scraper"
-views_field = "videoPlayCount"          # verify against the Instagram app in Task 4.1
+views_field = "videoPlayCount"
+include_shares = false                  # Apify sharesCount add-on (paying users only); feeds trends.share_weight          # verify against the Instagram app in Task 4.1
 run_timeout_sec = 900
 stats_results_per_account = 100
 
@@ -130,17 +138,6 @@ keep_backups = 14
 min_free_disk_gb = 10
 
 [captions]
-# Popular accounts whose post captions we copy. Approved by the owner 16.11.2026 (existence checked on
-# HypeAuditor / Social Blade / official sites; first Apify run confirms they are active and Japanese).
-donors_japanese = [
-  "disneyjp", "netflixjp", "tokyodisneyresort_official",   # cinema, entertainment
-  "voguejapan", "vivi_mag_official",                       # fashion
-  "visitjapanjp",                                          # travel
-  "kurashiru", "delishkitchen.tv",                         # food
-  "onepiece_staff",                                        # anime (ONE PIECE staff account)
-  # unverified, add after a manual check: "nationalpark_japan", "nihonryokan", "elle_japan"
-]
-donors_russian = []                     # owner decision: no Russian caption donors, so no account may use "russian"
 results_per_donor = 30
 fresh_days = 60
 min_likes = 1000                        # only popular posts; hidden likes (-1) count as passing
@@ -152,6 +149,16 @@ low_pool_alert = 50                     # per language: daily summary warns belo
 # The caption donor's own username and display name are always added to this list.
 brand_words = ["公式", "official", "オフィシャル", "®", "™", "Disney", "ディズニー", "Pixar", "ピクサー",
                "Marvel", "マーベル", "Star Wars", "スター・ウォーズ", "Netflix", "ネットフリックス"]
+donors_russian = {}                     # owner decision: no Russian caption donors, so no account may use "russian"
+
+# Caption and bio donors by account theme (addendum 1b): each account's captions come only from its theme.
+# Approved by the owner 16.11.2026 (existence checked on HypeAuditor / Social Blade / official sites).
+[captions.donors_japanese]
+cinema = ["disneyjp", "netflixjp", "tokyodisneyresort_official"]
+fashion = ["voguejapan", "vivi_mag_official"]
+travel = ["visitjapanjp"]               # unverified candidates: "nationalpark_japan", "nihonryokan"
+food = ["kurashiru", "delishkitchen.tv"]
+anime = ["onepiece_staff"]
 
 [[accounts]]
 nick = "example_account"
@@ -159,4 +166,8 @@ adspower_id = "jabc123"                 # AdsPower profile user_id
 background = "assets/backgrounds/example_account.jpg"
 daily_limit = 1
 caption_lang = "japanese"               # japanese | russian | none (post captions and bio)
+theme = "anime"                         # caption/bio theme: a key of captions.donors_<caption_lang> (addendum 1b)
+template = "circle"                     # circle | square (addendum 7b)
+donor_group = "memes"                   # memes | movies: which video donors feed this account (addendum 2b)
+cover = "assets/covers/example_account.jpg"   # 9:16 image uploaded as the reel cover; "" = Instagram's frame
 overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)

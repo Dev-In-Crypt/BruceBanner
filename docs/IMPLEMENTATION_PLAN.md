@@ -313,7 +313,7 @@ BEGIN
 END;
 ```
 
-Schema changes after the pilot starts: add numbered `ALTER TABLE` steps in `db.py` gated by `PRAGMA user_version`. Not needed before that.
+Schema changes: new columns go into `db.MIGRATIONS` (table, column, declaration); `db.connect` adds any that are missing, so existing databases upgrade on the next run. Addendum 2 added `sources.donor_group`, `sources.shares`, `captions.topic`, `publications.template` this way.
 
 ### 2.5 State machines
 
@@ -2023,6 +2023,26 @@ def test_decide():
 | 15 | Are all accounts professional (creator) accounts? Needed to see audience countries (`/geo`) and for Playerok's 500k+ stats recording | Task 3.5 | operator switches them during onboarding |
 
 ---
+
+## Addendum 2: square template, film/series donors, covers, account themes (implemented)
+
+Owner addendum of 18.11.2026 (`docs/spec-ru.md`, "Дополнение 2"). Implemented after Phases 0-6; each part is config-driven and tested.
+
+| Part | What the pipeline does | Config | Code | Tests |
+|------|------------------------|--------|------|-------|
+| 7b Square template | 1080x1920 black frame, top banner as usual, source cropped to a centered square (`square_size` at `square_top_y`, below the banner). Midroll, validation and the banner check are the same as for the circle. | `accounts[].template = "circle" \| "square"`, `compose.square_size`, `compose.square_top_y` (validated: below the banner, inside the frame) | `video.video_box`, `video.make_frame_png(..., template)`, `video.compose_base(..., template)` | `test_build_square_template` |
+| 2b Film/series donors | A second donor list. Sources are tagged `donor_group` (`memes` / `movies`); each account takes only its own group (fresh and reposts). Ranking (`trends.rank_score`): views / donor median, x1.75 (= 700 / 400) for sources of 12 s+ because they get the voiced banner, x(share rate / donor median share rate) bounded to 0.5..2 when Apify returns `sharesCount`. The topic filter applies to every group. | `trends.donors_movies`, `trends.voiced_priority`, `trends.share_weight`, `apify.include_shares` (paid add-on), `accounts[].donor_group` | `trends.donor_groups`, `trends.share_median`, `trends.rank_score`, `planner.plan` | `test_rank_score_prefers_voiced_and_shares`, `test_fetch_tags_donor_group_and_shares`, `test_accounts_only_get_their_donor_group` |
+| 10b Own cover | At the cover step of the upload dialog the account's image is uploaded (file input, or "Select from computer" + file chooser). If the cover step is not found, the post goes out with Instagram's frame, with a warning and a screenshot, unless `publish.require_cover = true`. | `accounts[].cover` (9:16 image), `publish.require_cover`, selectors `COVER_*` | `instagram.set_cover` | `test_publish_uploads_account_cover` (fake Instagram) |
+| 1b Account theme | Caption and bio pools are per (language, theme): `captions.donors_japanese` is a table theme -> accounts; harvest stores `captions.topic`; posts and bios take only captions of the account's theme. Nick, avatar and cover images are chosen by the operator in the same theme (runbook). Bios still never come from brand profiles (H10). | `accounts[].theme`, `[captions.donors_japanese]` table | `captions.pools_in_use`, `take_caption(..., topic)`, `reserve_bio(..., topic)` | `test_captions_follow_account_theme`, updated bio tests |
+
+Reports: the weekly report also groups by `template` and `donor_group`, so the pilot can compare circle vs square and memes vs film cuts. The daily summary shows free captions per language/theme.
+
+Decisions taken (owner may change them in config):
+- The template and the donor group are independent per-account settings. A square account can post memes, and a circle account can post film cuts, so formats and content can be compared separately.
+- The 12 s+ priority and the share weight apply to both donor groups. They only change the order in which selected sources are used; the selection threshold is unchanged.
+- Shares need Apify's paid `includeSharesCount`. Off by default; with it off, ranking uses views and duration only.
+
+Owner inputs for addendum 2: the list of Russian film/series cut accounts (`trends.donors_movies`); a cover image per account; the theme of each account (one of `cinema`, `fashion`, `travel`, `food`, `anime`, or a new key with its donors).
 
 ## 9. Requirements traceability (spec module -> tasks)
 

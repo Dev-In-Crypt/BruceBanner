@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_SUBDIRS = ("raw", "sources", "build", "screenshots", "backups", "locks", "tmp")
 CAPTION_LANGS = ("japanese", "russian", "none")
+TEMPLATES = ("circle", "square")
+DONOR_GROUPS = ("memes", "movies")
 
 
 def load_env(path=ROOT / ".env"):
@@ -41,7 +43,11 @@ def load(path=None, check_files=True) -> dict:
     b = cfg["banners"]
     b["top"], b["midroll"] = _abs(b["top"]), _abs(b["midroll"])
     for a in cfg["accounts"]:
-        a["background"] = _abs(a["background"])
+        a.setdefault("template", "circle")
+        a.setdefault("donor_group", "memes")
+        a.setdefault("theme", "")
+        a["background"] = _abs(a.get("background", ""))
+        a["cover"] = _abs(a.get("cover", ""))
     cfg["data"] = Path(_abs(cfg["data_dir"]))
     validate(cfg, check_files)
     for d in DATA_SUBDIRS:
@@ -62,10 +68,19 @@ def validate(cfg: dict, check_files=True) -> None:
             errors.append(f"account {a['nick']}: daily_limit must be 1..3, got {a['daily_limit']}")
         if a.get("caption_lang") not in CAPTION_LANGS:
             errors.append(f"account {a['nick']}: caption_lang must be one of {CAPTION_LANGS}")
-        elif a["caption_lang"] != "none" and not cap.get(f"donors_{a['caption_lang']}"):
-            errors.append(f"account {a['nick']}: caption_lang {a['caption_lang']} but captions.donors_{a['caption_lang']} is empty")
-        if check_files and not Path(a["background"]).is_file():
+        elif a["caption_lang"] != "none" and not cap.get(f"donors_{a['caption_lang']}", {}).get(a["theme"]):
+            errors.append(f"account {a['nick']}: theme {a['theme']!r} has no donors in "
+                          f"captions.donors_{a['caption_lang']}")
+        if a["template"] not in TEMPLATES:
+            errors.append(f"account {a['nick']}: template must be one of {TEMPLATES}")
+        if a["donor_group"] not in DONOR_GROUPS:
+            errors.append(f"account {a['nick']}: donor_group must be one of {DONOR_GROUPS}")
+        elif a["donor_group"] == "movies" and not cfg["trends"].get("donors_movies"):
+            errors.append(f"account {a['nick']}: donor_group movies but trends.donors_movies is empty")
+        if check_files and a["template"] == "circle" and not Path(a["background"]).is_file():
             errors.append(f"account {a['nick']}: background not found: {a['background']}")
+        if check_files and a["cover"] and not Path(a["cover"]).is_file():
+            errors.append(f"account {a['nick']}: cover not found: {a['cover']}")
     if check_files and not Path(b["top"]).is_file():
         errors.append(f"banners.top not found: {b['top']}")
     if check_files and b["midroll"] and not Path(b["midroll"]).is_file():
@@ -83,6 +98,15 @@ def validate(cfg: dict, check_files=True) -> None:
         errors.append(f"compose.text_y must be >= {banner_bottom} (below the top banner)")
     if c["circle_diameter"] > c["width"] or c["circle_center_y"] + c["circle_diameter"] / 2 > c["height"]:
         errors.append("circle does not fit the frame")
+    if c["square_top_y"] < banner_bottom:
+        errors.append(f"compose.square_top_y must be >= {banner_bottom} (below the top banner)")
+    if c["square_size"] > c["width"] or c["square_top_y"] + c["square_size"] > c["height"]:
+        errors.append("square does not fit the frame")
+    if c["text_overlay"]:  # the text plate must never cover the video either
+        if c["square_text_y"] < c["square_top_y"] + c["square_size"]:
+            errors.append(f"compose.square_text_y must be >= {c['square_top_y'] + c['square_size']} (below the square)")
+        if c["square_text_y"] + c["text_size"] > c["height"]:
+            errors.append("compose.square_text_y: the text plate does not fit below the square")
     if cfg["playerok"]["submit_by_day"] >= cfg["playerok"]["deadline_days"]:
         errors.append("playerok.submit_by_day must be < deadline_days")
     if cfg["planner"]["window_start"] >= cfg["planner"]["window_end"]:
