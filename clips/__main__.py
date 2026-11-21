@@ -36,6 +36,8 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("nick")
     s.add_argument("status", choices=["active", "paused", "check", "banned"])
     s.add_argument("--reason", default="manual")
+    bd = sub.add_parser("account-bound", parents=[common], help="mark an account as bound in the Playerok bot")
+    bd.add_argument("nick")
     h = sub.add_parser("health", parents=[common], help="open the profile, check the account, close")
     h.add_argument("--account", required=True)
     f = sub.add_parser("publish-file", parents=[common], help="publish one local file (manual test)")
@@ -59,6 +61,7 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("submit-check", parents=[common], help="only the submit logic + notifications")
     sub.add_parser("bot", parents=[common], help="long-running Telegram bot for the operator")
     sub.add_parser("summary", parents=[common], help="daily summary to Telegram")
+    sub.add_parser("moderate-comments", parents=[common], help="delete spam/bait/links/bots under our reels")
     ns = sub.add_parser("notion-setup", parents=[common], help="create the two Notion databases")
     ns.add_argument("--parent-page", required=True, help="Notion page id to create the databases in")
     sub.add_parser("notion-sync", parents=[common], help="push changed rows to Notion")
@@ -75,9 +78,9 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_command(args, cfg, con) -> int:
-    from clips import captions, instagram, maintenance, notion, planner, reports, submit, telegram, trends, video
+    from clips import captions, comments, instagram, maintenance, notion, planner, reports, submit, telegram, trends, video
     dry = args.dry_run
-    if args.command in ("sync-accounts", "account-status", "health", "publish-file") and not dry:
+    if args.command in ("sync-accounts", "account-status", "account-bound", "health", "publish-file") and not dry:
         db.sync_accounts(con, cfg)
     if args.command == "init-db":
         print(cfg["data"] / "clips.db")
@@ -99,6 +102,13 @@ def run_command(args, cfg, con) -> int:
         if not dry:
             db.set_account_status(con, args.nick, args.status, args.reason)
         print(f"@{args.nick}: {args.status}")
+    elif args.command == "account-bound":
+        account_cfg(cfg, args.nick)
+        if not dry:
+            with con:
+                con.execute("UPDATE accounts SET bound_at = ?, updated_at = ? WHERE nick = ?",
+                            (db.now_iso(), db.now_iso(), args.nick))
+        print(f"@{args.nick}: bound")
     elif args.command == "health":
         instagram.run_health(cfg, con, account_cfg(cfg, args.account), dry)
     elif args.command == "publish-file":
@@ -131,6 +141,8 @@ def run_command(args, cfg, con) -> int:
         if dry:
             raise SystemExit("bot has no --dry-run mode: it must record the operator's answers")
         telegram.run_bot(cfg, con)
+    elif args.command == "moderate-comments":
+        comments.run_moderation(cfg, con, dry)
     elif args.command == "summary":
         reports.run_summary(cfg, con, dry)
     elif args.command == "notion-setup":

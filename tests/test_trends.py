@@ -117,3 +117,14 @@ def test_donor_moved_to_movies_updates_its_sources(cfg, con, tmp_path):
     cfg["trends"]["donors_movies"] = ["kino_cuts"]           # owner moves the donor to the film-cut list
     trends.fetch(cfg, con, False, f)
     assert con.execute("SELECT donor_group FROM sources WHERE shortcode = 'K1'").fetchone()[0] == "movies"
+
+
+def test_source_shorter_than_banner_is_rejected(cfg, con, tmp_path, monkeypatch):
+    history = [item(f"H{i}", views=100_000, hours_ago=100 + i) for i in range(10)]
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps(history + [item("SHORT", views=900_000, hours_ago=5, duration=6.0)]))
+    trends.fetch(cfg, con, False, f)
+    monkeypatch.setattr(video, "banner_duration", lambda c: 8.0)
+    trends.select(cfg, con, False)
+    assert con.execute("SELECT state, reason FROM sources WHERE shortcode = 'SHORT'").fetchone()[:] == \
+        ("rejected", "shorter_than_banner")

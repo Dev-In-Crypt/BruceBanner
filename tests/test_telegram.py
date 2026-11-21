@@ -122,3 +122,15 @@ def test_failed_update_is_redelivered_then_skipped(cfg, con, bot, monkeypatch):
     for _ in range(telegram.MAX_TRIES):                                      # a poison update is skipped
         off = telegram.poll_once(con, cfg, off, pending, fails)
     assert off == 11 and fails == {}
+
+
+def test_bot_bound_and_limit(cfg, con, bot):
+    press, say = bot
+    cfg["accounts"] = [{"nick": "acc1"}]
+    h = lambda u: telegram.handle_update(con, cfg, u, {})  # noqa: E731
+    assert h(say("/bound @acc1"))[0][1] == "@acc1: привязан к Playerok"
+    assert con.execute("SELECT bound_at FROM accounts WHERE nick = 'acc1'").fetchone()[0]
+    assert "Формат" in h(say("/bound nobody"))[0][1]
+    replies = [t for _, t in h(say("/limit 30000 100000"))]
+    assert "осталось 30 000 из 100 000" in replies[0] and "Запросите увеличение" in replies[1]
+    assert "Формат" in h(say("/limit 5 1"))[0][1]

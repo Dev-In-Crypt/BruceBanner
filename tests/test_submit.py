@@ -161,3 +161,26 @@ def test_reel_without_view_count_is_not_reported_missing(cfg, con, tmp_path, sen
     f.write_text(json.dumps([{**stats_item("AAA", 0), "videoPlayCount": None, "videoViewCount": None}]))
     submit.collect(cfg, con, False, f, now=NOW)
     assert sent == [] and con.execute("SELECT error FROM publications").fetchone()[0] is None
+
+
+def test_engagement_risk(cfg):
+    p = cfg["playerok"]
+    assert submit.engagement_risk(100_000, 200, 50, p)            # 0.25% < 1%
+    assert not submit.engagement_risk(100_000, 3000, 100, p)
+    assert not submit.engagement_risk(40_000, 0, 0, p)             # below 50k: no flag
+    assert not submit.engagement_risk(100_000, None, None, p)      # no data: no flag
+
+
+def test_submit_message_carries_warnings(cfg, con, sent):
+    db.sync_accounts(con, {"accounts": [{"nick": "acc1"}]})
+    add_pub(con, "RISK1", 20, last_views=120_000, last_likes=100, last_comments=5)
+    submit.run_submit_check(cfg, con, False, now=NOW)
+    text = sent[0][0]
+    assert "Риск отказа" in text and "не отмечен как привязанный" in text and "Лимит автора не введён" in text
+
+
+def test_author_limit_alert_once_over_half(con):
+    submit.set_author_limit(con, 100, 60)
+    assert submit.limit_alerts(con) == []                          # 40% used
+    submit.set_author_limit(con, 100, 40)
+    assert "60%" in submit.limit_alerts(con)[0] and submit.limit_alerts(con) == []   # once per entry

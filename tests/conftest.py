@@ -45,6 +45,9 @@ def cfg(tmp_path, media):
         (tmp_path / sub).mkdir(exist_ok=True)
     c["banners"]["top"] = str(media["banner"])
     c["banners"]["midroll"] = str(media["midroll"])
+    c["banners"]["sets"] = [{"name": "test", "top": c["banners"]["top"], "midroll": c["banners"]["midroll"],
+                             "chroma_key": ""}]
+    c["accounts"][0]["template"] = "circle"  # most layout tests were written for the circle
     c["accounts"][0]["background"] = str(media["bg"])
     c["compose"]["preset"] = "veryfast"  # speed only; output format is the same
     return c

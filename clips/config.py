@@ -3,7 +3,9 @@ import math
 import os
 import re
 import tomllib
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_SUBDIRS = ("raw", "sources", "build", "screenshots", "backups", "locks", "tmp")
@@ -41,9 +43,15 @@ def load(path=None, check_files=True) -> dict:
         raise SystemExit(f"config not found: {p} (copy config.example.toml to config.toml)")
     cfg = tomllib.loads(p.read_text(encoding="utf-8"))
     b = cfg["banners"]
-    b["top"], b["midroll"] = _abs(b["top"]), _abs(b["midroll"])
+    # addendum 3: dated banner sets; an old config with plain top/midroll is one set without dates
+    b["sets"] = b.get("sets") or [{"name": "default", "top": b.get("top", ""), "midroll": b.get("midroll", "")}]
+    for st in b["sets"]:
+        st["top"], st["midroll"] = _abs(st["top"]), _abs(st.get("midroll", ""))
+        st.setdefault("chroma_key", "")
+    use_banner_set(cfg, active_set(cfg))
     for a in cfg["accounts"]:
-        a.setdefault("template", "circle")
+        a.setdefault("template", "square")  # addendum 3: a decorative background is a moderation risk
+        a.setdefault("bind_code", "")
         a.setdefault("donor_group", "memes")
         a.setdefault("theme", "")
         a["background"] = _abs(a.get("background", ""))
@@ -53,6 +61,23 @@ def load(path=None, check_files=True) -> dict:
     for d in DATA_SUBDIRS:
         (cfg["data"] / d).mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def today(cfg) -> date:
+    return datetime.now(ZoneInfo(cfg.get("timezone", "Europe/Moscow"))).date()
+
+
+def active_set(cfg, day: date | None = None) -> dict | None:
+    """The banner set valid on `day` (first match), or None: then building stops (addendum 3)."""
+    day = day or today(cfg)
+    return next((st for st in cfg["banners"]["sets"]
+                 if st.get("start", date.min) <= day <= st.get("end", date.max)), None)
+
+
+def use_banner_set(cfg, st: dict | None) -> None:
+    """Copy the set's files into banners.top / banners.midroll, which the build reads. None -> top = ''."""
+    st = st or {"name": "", "top": "", "midroll": "", "chroma_key": ""}
+    cfg["banners"].update(top=st["top"], midroll=st["midroll"], chroma_key=st["chroma_key"], set_name=st["name"])
 
 
 def validate(cfg: dict, check_files=True) -> None:
@@ -81,10 +106,21 @@ def validate(cfg: dict, check_files=True) -> None:
             errors.append(f"account {a['nick']}: background not found: {a['background']}")
         if check_files and a["cover"] and not Path(a["cover"]).is_file():
             errors.append(f"account {a['nick']}: cover not found: {a['cover']}")
-    if check_files and not Path(b["top"]).is_file():
-        errors.append(f"banners.top not found: {b['top']}")
-    if check_files and b["midroll"] and not Path(b["midroll"]).is_file():
-        errors.append(f"banners.midroll not found: {b['midroll']}")
+    for st in b["sets"]:
+        if check_files and not Path(st["top"]).is_file():
+            errors.append(f"banner set {st['name']!r}: top not found: {st['top']}")
+        if check_files and st["midroll"] and not Path(st["midroll"]).is_file():
+            errors.append(f"banner set {st['name']!r}: midroll not found: {st['midroll']}")
+        if st.get("start", date.min) > st.get("end", date.max):
+            errors.append(f"banner set {st['name']!r}: start is after end")
+        if st["chroma_key"] and not re.fullmatch(r"0x[0-9A-Fa-f]{6}", st["chroma_key"]):
+            errors.append(f"banner set {st['name']!r}: chroma_key must look like 0x00FF00")
+    z = c.get("safe_zone")
+    if z:  # the banner must stay clear of Instagram's own UI (addendum 3); width is checked at build
+        if b["top_y"] < z["top"]:
+            errors.append(f"banners.top_y must be >= compose.safe_zone.top ({z['top']}): the Reels header covers it")
+        if b["top_y"] + b["top_height_px"] > c["height"] - z["bottom"]:
+            errors.append("the top banner reaches into compose.safe_zone.bottom (caption, buttons)")
     if b["top_min_height_px"] < math.ceil(c["height"] / 6):
         errors.append(f"banners.top_min_height_px must be >= {math.ceil(c['height'] / 6)} (1/6 of the frame)")
     if b["top_height_px"] < b["top_min_height_px"]:
@@ -111,6 +147,13 @@ def validate(cfg: dict, check_files=True) -> None:
         errors.append("playerok.submit_by_day must be < deadline_days")
     if cfg["planner"]["window_start"] >= cfg["planner"]["window_end"]:
         errors.append("planner.window_start must be < window_end")
+    cm = cfg.get("comments", {})
+    for pat in [cm.get("link_pattern", ""), cm.get("bot_name_pattern", ""), *cm.get("spam_patterns", []),
+                *cm.get("bait_patterns", [])]:
+        try:
+            re.compile(pat)
+        except re.error as e:
+            errors.append(f"comments: bad regex {pat!r}: {e}")
     for pat in cfg["filter"]["blocked_patterns"]:
         try:
             re.compile(pat)

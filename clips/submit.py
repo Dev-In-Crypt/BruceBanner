@@ -51,6 +51,40 @@ def decide(views, age_days, views_48h_ago, account_status, p) -> tuple[str, str 
     return "submit_now", "stalled"
 
 
+def engagement_risk(views, likes, comments, p) -> bool:
+    """Addendum 3: 50k+ views with abnormally few likes and comments may be rejected as bought views."""
+    if views is None or likes is None or views < p["risk_min_views"]:
+        return False
+    return (likes + (comments or 0)) / views * 100 < p["risk_min_engagement_pct"]
+
+
+# ---------- author limit: one for the whole network, entered by the operator (addendum 3) ----------
+
+def set_author_limit(con, total, remaining):
+    with con:
+        con.execute("INSERT INTO author_limit (id, total, remaining, updated_at) VALUES (1, ?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET total = excluded.total, remaining = excluded.remaining, "
+                    "updated_at = excluded.updated_at, alerted_at = NULL", (total, remaining, db.now_iso()))
+
+
+def limit_text(con) -> str:
+    r = con.execute("SELECT * FROM author_limit WHERE id = 1").fetchone()
+    if not r:
+        return "Лимит автора не введён: /limit <остаток> <всего> (раздел «Мои лимиты» в боте Playerok)"
+    used = (r["total"] - r["remaining"]) / r["total"] * 100
+    return f"Лимит автора: осталось {telegram.num(r['remaining'])} из {telegram.num(r['total'])} (использовано {used:.0f}%)"
+
+
+def limit_alerts(con, used_pct=50) -> list[str]:
+    """One "ask for a higher limit" message per operator entry, once more than used_pct is used."""
+    r = con.execute("SELECT * FROM author_limit WHERE id = 1").fetchone()
+    if not r or r["alerted_at"] or (r["total"] - r["remaining"]) / r["total"] * 100 <= used_pct:
+        return []
+    with con:
+        con.execute("UPDATE author_limit SET alerted_at = ? WHERE id = 1", (db.now_iso(),))
+    return [f"⚠️ {limit_text(con)}. Запросите увеличение лимита в боте Playerok."]
+
+
 def views_48h_ago(con, pub_id, now) -> int | None:
     # 48 h +/- 3 h: the daily job does not run at exactly the same second every day. Older snapshots
     # (a missed run) would turn multi-day growth into "48 h growth", so they count as no baseline.
@@ -91,7 +125,9 @@ def collect(cfg, con, dry, from_file=None, now=None) -> dict:
                 with con:
                     con.execute("INSERT OR IGNORE INTO view_snapshots (publication_id, taken_at, views, likes)"
                                 " VALUES (?, ?, ?, ?)", (by_code[code]["id"], taken, views, i.get("likesCount")))
-                    con.execute("UPDATE publications SET last_views = ? WHERE id = ?", (views, by_code[code]["id"]))
+                    con.execute("UPDATE publications SET last_views = ?, last_likes = ?, last_comments = ? "
+                                "WHERE id = ?", (views, i.get("likesCount"), i.get("commentsCount"),
+                                                 by_code[code]["id"]))
     resolved = resolve_unconfirmed(cfg, con, items, dry, now)
     report_missing(con, cfg, seen, dry, now)
     log.info("stats: %s items, %s snapshots, %s unconfirmed resolved%s", len(items), n, resolved,
@@ -156,7 +192,7 @@ def report_missing(con, cfg, seen, dry, now):
 def run_submit_check(cfg, con, dry, now=None, nick=None) -> list:
     now, p = now or datetime.now(timezone.utc), cfg["playerok"]
     rows = con.execute(
-        "SELECT p.*, COALESCE(a.status, 'active') AS account_status FROM publications p "
+        "SELECT p.*, COALESCE(a.status, 'active') AS account_status, a.bound_at FROM publications p "
         "LEFT JOIN accounts a ON a.nick = p.account WHERE p.state = 'published' AND p.last_views IS NOT NULL "
         "AND (p.submit_status IS NULL OR p.submit_status IN ('low','candidate')"
         " OR (p.submit_status = 'submit_now' AND p.notified_at IS NULL))"  # retry an undelivered alert
@@ -179,10 +215,28 @@ def run_submit_check(cfg, con, dry, now=None, nick=None) -> list:
                             " needs_screen_recording = ? WHERE id = ?", (status, reason, growth, rec, r["id"]))
         if status == "submit_now" and r["notified_at"] is None:
             pub = {**dict(r), "submit_reason": reason, "growth_48h_pct": growth, "needs_screen_recording": rec}
-            text, buttons = telegram.msg_submit(pub, cfg)
+            text, buttons = telegram.msg_submit(pub, cfg, submit_warnings(con, cfg, r))
             if telegram.send(text, buttons, dry=dry) and not dry:  # mark sent only when delivered
                 with con:
                     con.execute("UPDATE publications SET notified_at = ? WHERE id = ?", (db.iso(now), r["id"]))
+    return out
+
+
+def submit_warnings(con, cfg, r) -> list[str]:
+    """Things the operator checks before submitting (addendum 3)."""
+    from clips.instagram import settings_problems
+    out = []
+    if engagement_risk(r["last_views"], r["last_likes"], r["last_comments"], cfg["playerok"]):
+        out.append(f"⚠️ Риск отказа: мало лайков и комментариев ({telegram.num(r['last_likes'] or 0)} / "
+                   f"{telegram.num(r['last_comments'] or 0)}) для {telegram.num(r['last_views'])} просмотров")
+    if not r["bound_at"]:
+        out.append("⚠️ Аккаунт не отмечен как привязанный к Playerok (/bound <ник>)")
+    bad, unknown = settings_problems(con, r["account"])
+    if bad:
+        out.append("⚠️ Настройки аккаунта: " + ", ".join(bad))
+    if unknown:
+        out.append("Проверьте вручную: " + ", ".join(unknown))
+    out.append(limit_text(con))
     return out
 
 
@@ -190,4 +244,7 @@ def run_stats(cfg, con, dry, from_file=None):
     from clips import notion
     collect(cfg, con, dry, from_file)
     run_submit_check(cfg, con, dry)
+    if not dry:
+        for text in limit_alerts(con, cfg["playerok"]["limit_alert_used_pct"]):
+            telegram.send(text)
     notion.sync(cfg, con, dry)  # skipped when Notion is not configured

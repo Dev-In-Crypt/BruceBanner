@@ -1,4 +1,5 @@
 """SQLite: schema, connection, time helpers. Single source of truth."""
+import re
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -101,6 +102,24 @@ CREATE TABLE IF NOT EXISTS view_snapshots (
   PRIMARY KEY (publication_id, taken_at)
 );
 
+CREATE TABLE IF NOT EXISTS author_limit (       -- Playerok author limit, one for the whole network (addendum 3)
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  total       INTEGER NOT NULL,                  -- as shown in the bot under "Мои лимиты", entered by the operator
+  remaining   INTEGER NOT NULL,
+  updated_at  TEXT NOT NULL,
+  alerted_at  TEXT                               -- "ask for a higher limit" sent for this entry
+);
+
+CREATE TABLE IF NOT EXISTS comment_actions (    -- comment moderation log (addendum 3)
+  id             INTEGER PRIMARY KEY,
+  publication_id INTEGER NOT NULL REFERENCES publications(id),
+  author         TEXT,
+  text           TEXT,
+  rule           TEXT NOT NULL,                  -- which rule matched: link / spam / bait / bot
+  deleted_at     TEXT,                           -- NULL in dry-run or when the delete failed
+  created_at     TEXT NOT NULL
+);
+
 -- Any change of a field mirrored to Notion marks the row dirty. notion-sync clears the flag.
 CREATE TRIGGER IF NOT EXISTS publications_notion_dirty
 AFTER UPDATE OF state, published_at, ig_url, last_views, growth_48h_pct, submit_status,
@@ -118,11 +137,24 @@ MIGRATIONS = [
     ("sources", "shares", "INTEGER"),                               # Apify sharesCount, if available
     ("captions", "topic", "TEXT NOT NULL DEFAULT ''"),              # account theme the caption belongs to
     ("publications", "template", "TEXT"),                           # circle | square, for reports
+    # addendum 3
+    ("accounts", "bound_at", "TEXT"),                               # Playerok binding confirmed by the operator
+    ("accounts", "settings_check", "TEXT"),                         # JSON {check: ok | problem | unknown}
+    ("accounts", "settings_checked_at", "TEXT"),
+    ("publications", "is_bind", "INTEGER NOT NULL DEFAULT 0"),      # the reel carrying the binding code
+    ("publications", "last_likes", "INTEGER"),
+    ("publications", "last_comments", "INTEGER"),
+    ("publications", "comments_checked_at", "TEXT"),
 ]
 
 
 def missing_columns(con) -> list:
     return [m for m in MIGRATIONS if m[1] not in {r[1] for r in con.execute(f"PRAGMA table_info({m[0]})")}]
+
+
+def missing_tables(con) -> list[str]:
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    return [t for t in re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", SCHEMA) if t not in have]
 
 
 def migrate(con) -> None:
@@ -136,11 +168,12 @@ def connect(path, readonly=False) -> sqlite3.Connection:
     if readonly:
         if Path(path).exists():
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
-            if missing_columns(con):  # older DB: migrate an in-memory copy, never the file
+            if missing_columns(con) or missing_tables(con):  # older DB: migrate an in-memory copy, never the file
                 mem = sqlite3.connect(":memory:")
                 con.backup(mem)
                 con.close()
                 con = mem
+                con.executescript(SCHEMA)
                 migrate(con)
         else:
             con = sqlite3.connect(":memory:")

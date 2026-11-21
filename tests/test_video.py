@@ -134,3 +134,73 @@ def test_square_text_plate_is_below_the_video(cfg, media, tmp_path):
     f = video.grab_frame(out, 2)
     plate = f.crop((0, y + size, 1080, 1920))
     assert max(hi for _, hi in plate.getextrema()) > 100           # the white text is in the black margin
+
+
+# ---------- addendum 3: banner sets, .mov / chroma key banners, loop rule, safe zone ----------
+
+def ff(*args):
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *map(str, args)], check=True)
+
+
+def moving_banner(path, seconds, codec):
+    """A red square moving right on a transparent 600x480 canvas: like an animated Playerok banner."""
+    bg = "black@0.0" if codec == "qtrle" else "0x00FF00"
+    ff("-f", "lavfi", "-i", f"color=c={bg}:s=600x480:r=30:d={seconds},format=rgba",
+       "-f", "lavfi", "-i", f"color=c=red:s=200x200:r=30:d={seconds},format=rgba",
+       "-filter_complex", "[0][1]overlay=x='t*80':y=140,format=" + ("argb" if codec == "qtrle" else "yuv420p"),
+       "-c:v", codec, path)
+    return str(path)
+
+
+def test_active_banner_set_by_date(cfg):
+    from datetime import date
+    from clips import config
+    cfg["banners"]["sets"] = [{"name": "nov", "start": date(2026, 11, 1), "end": date(2026, 11, 30)},
+                              {"name": "dec", "start": date(2026, 12, 1), "end": date(2026, 12, 31)}]
+    assert config.active_set(cfg, date(2026, 11, 30))["name"] == "nov"
+    assert config.active_set(cfg, date(2026, 12, 1))["name"] == "dec"
+    assert config.active_set(cfg, date(2027, 1, 1)) is None
+
+
+def test_build_stops_without_banner_set(cfg, media, tmp_path):
+    from clips import config
+    config.use_banner_set(cfg, None)
+    with pytest.raises(video.NoBannerSet):
+        video.build(media["src8"], cfg["accounts"][0], cfg, tmp_path / "x.mp4")
+
+
+def test_animated_mov_banner_with_transparency(cfg, media, tmp_path):
+    cfg["banners"]["top"] = moving_banner(tmp_path / "b.mov", 4, "qtrle")
+    out = tmp_path / "m.mp4"
+    meta = video.build(media["src25"], cfg["accounts"][0], cfg, out)   # validated inside, midroll included
+    assert meta["banner_type"] == "voiced"
+    f = video.grab_frame(out, 0.5)
+    bw, bh = video.banner_size(cfg)
+    x0, y0 = video.banner_x(cfg, bw), cfg["banners"]["top_y"]
+    assert f.getpixel((x0 + bw - 5, y0 + 5)) != (0, 0, 0)          # transparent corner shows the background
+    cfg["banners"]["top"] = moving_banner(tmp_path / "b2.mov", 3, "qtrle")  # other loop length -> mismatch
+    assert any("banner mismatch" in e for e in video.validate(out, cfg, meta["duration"], (12, 15)))
+
+
+def test_source_shorter_than_banner_loop_is_rejected(cfg, media, tmp_path):
+    cfg["banners"]["top"] = moving_banner(tmp_path / "long.mov", 10, "qtrle")
+    with pytest.raises(ValueError, match="shorter than the banner"):
+        video.build(media["src8"], cfg["accounts"][0], cfg, tmp_path / "x.mp4")
+
+
+def test_mp4_banner_on_green_is_keyed(cfg, media, tmp_path):
+    cfg["banners"]["top"] = moving_banner(tmp_path / "g.mp4", 4, "libx264")
+    cfg["banners"]["chroma_key"] = "0x00FF00"
+    out = tmp_path / "k.mp4"
+    video.build(media["src8"], cfg["accounts"][0], cfg, out)
+    bw, _ = video.banner_size(cfg)
+    r, g, b = video.grab_frame(out, 1).getpixel((video.banner_x(cfg, bw) + bw - 5, cfg["banners"]["top_y"] + 5))
+    assert not (g > 200 and r < 80 and b < 80)                      # no green box around the banner
+
+
+def test_banner_outside_safe_zone(cfg, tmp_path):
+    from PIL import Image
+    Image.new("RGBA", (1000, 360)).save(tmp_path / "w.png")
+    cfg["banners"]["top"] = str(tmp_path / "w.png")
+    with pytest.raises(ValueError, match="safe zone"):
+        video.check_banner_place(cfg)

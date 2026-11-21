@@ -40,6 +40,11 @@ def summary_text(con, cfg, now=None) -> str:
         lines.append(f"  pub#{r['id']} @{r['account']} {telegram.num(r['last_views'] or 0)} просм., подать до {by:%d.%m}")
     lines.append(f"Кандидаты: {cnt('candidate')} · Поданы, ждут решения: {cnt('submitted')}")
     lines.append(f"Одобрено в этом месяце: {telegram.num(approved)} ₽")
+    from clips.submit import limit_text
+    lines.append(limit_text(con))
+    unbound = [n for (n,) in q("SELECT nick FROM accounts WHERE bound_at IS NULL ORDER BY nick")]
+    if unbound:
+        lines.append("Не привязаны к Playerok: " + ", ".join("@" + n for n in unbound))
     pools = captions.pools_in_use(cfg)
     if pools:
         parts = []
@@ -80,6 +85,10 @@ def weekly(con, cfg, now=None) -> str:
                           ).fetchone()[0]
     totals = (f"Итого: роликов {len(rows)}, просмотров {num(sum(views))}, 50k+ {pct(views)}, "
               f"одобрено {num(sum(r[1] for r in approved))} ₽, ждут подачи/решения {pending}")
+    # addendum 3: compare caption languages by approval share too (all decisions so far, not only this week)
+    decided = {r[0]: (r[1], r[2]) for r in con.execute(
+        "SELECT caption_lang, SUM(submit_status = 'approved'), COUNT(*) FROM publications "
+        "WHERE submit_status IN ('approved','rejected') GROUP BY caption_lang")}
     sections = []
     for key, label in GROUPS:
         groups = {}
@@ -92,6 +101,8 @@ def weekly(con, cfg, now=None) -> str:
             if key == "caption_lang":
                 geo = [r["ru_audience_pct"] for r in rs if r["ru_audience_pct"] is not None]
                 line += f"  РФ {sum(geo) / len(geo):.0f}% (n={len(geo)})" if geo else "  РФ - (n=0)"
+                ok, n = decided.get(name, (0, 0))
+                line += f"  одобр. {100 * ok / n:.0f}% (n={n})" if n else "  одобр. - (n=0)"
             lines.append(line)
         sections.append("\n".join(lines))
     money = ["Деньги за неделю:"] + [f"@{a}: {num(s)} ₽ ({c} шт)" for a, s, c in approved]

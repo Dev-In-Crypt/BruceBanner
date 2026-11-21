@@ -3,6 +3,7 @@
 H1: there is no code here that edits or takes down a published post. Keep it that way.
 """
 import fcntl
+import json
 import logging
 import random
 import re
@@ -160,6 +161,48 @@ def apply_health(con, cfg, nick, health, screenshot=None, dry=False):
     telegram.send(text, buttons, screenshot, dry)
     from clips import submit  # account in danger: its reels with 50k+ should be submitted now
     submit.run_submit_check(cfg, con, dry, nick=nick)
+
+
+SETTINGS_RU = {"private": "аккаунт закрыт", "search_engines": "запрещено появление в поисковых системах",
+               "account_status": "«Статус аккаунта» не весь зелёный", "age_geo": "ограничения по возрасту или гео"}
+
+
+def switch_state(page, name_re) -> bool | None:
+    for role in ("switch", "checkbox"):
+        loc = page.get_by_role(role, name=re.compile(name_re, re.I))
+        if loc.count():
+            return loc.first.is_checked()
+    return None
+
+
+def text_state(page, bad, ok) -> str:
+    t = page_text(page).lower()
+    return "problem" if any(s in t for s in bad) else "ok" if any(s in t for s in ok) else "unknown"
+
+
+def check_settings(page, cfg) -> dict:
+    """Addendum 3: Playerok accepts only public, searchable accounts with a green status and no age/geo limits."""
+    r = {}
+    page.goto(IG + S.PRIVACY_URL, wait_until="domcontentloaded")
+    pause(cfg)
+    private, search = switch_state(page, S.PRIVATE_SWITCH), switch_state(page, S.SEARCH_ENGINES_SWITCH)
+    r["private"] = "unknown" if private is None else "problem" if private else "ok"
+    r["search_engines"] = "unknown" if search is None else "ok" if search else "problem"
+    page.goto(IG + S.ACCOUNT_STATUS_URL, wait_until="domcontentloaded")
+    pause(cfg)
+    r["account_status"] = text_state(page, S.TEXT_STATUS_BAD, S.TEXT_STATUS_OK)
+    page.goto(IG + S.AUDIENCE_URL, wait_until="domcontentloaded")
+    pause(cfg)
+    r["age_geo"] = text_state(page, S.TEXT_AGE_GEO_BAD, S.TEXT_AGE_GEO_OK)
+    return r
+
+
+def settings_problems(con, nick) -> tuple[list[str], list[str]]:
+    """(problems, not checked) in Russian, from the last settings check."""
+    row = con.execute("SELECT settings_check FROM accounts WHERE nick = ?", (nick,)).fetchone()
+    r = json.loads(row[0]) if row and row[0] else {}
+    return ([SETTINGS_RU[k] for k, v in r.items() if v == "problem"],
+            [SETTINGS_RU[k] for k in SETTINGS_RU if r.get(k, "unknown") == "unknown"])
 
 
 def db_status(con, nick) -> str:
@@ -351,6 +394,9 @@ def publish_one(cfg, con, pub: dict, account: dict, dry=False) -> str:
     if built.is_relative_to((cfg["data"] / "build").resolve()):  # only our own build files, never user files
         built.unlink(missing_ok=True)
     log.info("pub=%s account=%s published %s/reel/%s/", pid, nick, IG, code)
+    if pub.get("is_bind"):  # addendum 3: the operator confirms the binding in the Playerok bot
+        alert(f"🔗 Код привязки опубликован на @{nick}: {IG}/reel/{code}/\n"
+              f"Подтвердите привязку в боте Playerok, затем отправьте здесь /bound {nick}", dry=dry)
     return state
 
 
@@ -375,8 +421,18 @@ def run_health(cfg, con, account, dry) -> str:
         pause(cfg)
         health = check_health(page)
         shot = save_debug(cfg, page, nick, "health")
-    print(health)
+        settings = check_settings(page, cfg) if health == "ok" else None
+        settings_shot = save_debug(cfg, page, nick, "settings") if settings else None
+    print(health, settings or "")
     apply_health(con, cfg, nick, health, shot, dry)
+    if settings is not None:
+        if not dry:
+            with con:
+                con.execute("UPDATE accounts SET settings_check = ?, settings_checked_at = ? WHERE nick = ?",
+                            (json.dumps(settings), db.now_iso(), nick))
+        bad = [SETTINGS_RU[k] for k, v in settings.items() if v == "problem"]
+        if bad:
+            alert(f"⚠️ @{nick}: настройки мешают подаче в Playerok: {', '.join(bad)}", settings_shot, dry)
     return health
 
 

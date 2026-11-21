@@ -1,0 +1,10 @@
+[Unit]
+Description=clips comment moderation (daily, addendum 3)
+
+[Timer]
+OnCalendar=*-*-* 14:20:00 Europe/Moscow
+Persistent=true
+Unit=clips@moderate-comments.service
+
+[Install]
+WantedBy=timers.target

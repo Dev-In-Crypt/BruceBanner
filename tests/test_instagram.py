@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from clips import adspower, db, instagram, video
+from clips import adspower, db, instagram, telegram, video
+from clips import ig_selectors as S
 
 CHROME = shutil.which("chromium") or "/opt/pw-browsers/chromium"
 
@@ -31,6 +32,12 @@ def test_parse_followers():
     assert instagram.parse_followers("12.5K Followers, 3 Following") == 12500
     assert instagram.parse_followers("1 234 подписчиков, 56 подписок") == 1234
     assert instagram.parse_followers("nothing here") is None
+
+
+def test_no_paid_promotion_code():
+    """Addendum 3: never boost or promote a reel."""
+    for f in ("clips/instagram.py", "clips/ig_selectors.py", "clips/comments.py"):
+        assert not re.search(r"boost|promot|продвиг|продвин", Path(f).read_text(), re.I), f
 
 
 def test_no_post_takedown_code():
@@ -131,7 +138,7 @@ def chrome_ws(tmp_path):
 @pytest.fixture
 def fake_ig(cfg, con, monkeypatch, chrome_ws, media):
     """AdsPower returns our local Chromium; instagram.com is answered by a fake site."""
-    site = {"shared": None, "home_text": "", "bio": "old bio", "cover": None}
+    site = {"shared": None, "home_text": "", "bio": "old bio", "cover": None, "deleted": [], "pages": {}}
     monkeypatch.setattr(adspower, "start", lambda c, pid: chrome_ws)
     monkeypatch.setattr(adspower, "stop", lambda c, pid: None)
 
@@ -144,7 +151,12 @@ def fake_ig(cfg, con, monkeypatch, chrome_ws, media):
         if path == "/__share":
             site["shared"] = req.post_data
             return route.fulfill(status=200, body="ok")
-        if path == "/":
+        if path == "/__delcomment":
+            site["deleted"].append(req.post_data)
+            return route.fulfill(status=200, body="ok")
+        if path in site["pages"]:
+            html = site["pages"][path]
+        elif path == "/":
             html = HOME % site["home_text"]
         elif path == "/acc1/reels/":
             links = '<a href="/reel/PIN001/">p</a>' + ('<a href="/reel/NEW123/">n</a>' if site["shared"] else "")
@@ -277,3 +289,81 @@ def test_cover_upload_failure_falls_back_unless_required(cfg, monkeypatch, tmp_p
     cfg["publish"]["require_cover"] = True
     with pytest.raises(RuntimeError):
         instagram.set_cover(Page(), cfg, "acc1", tmp_path / "c.jpg")
+
+
+# ---------- addendum 3: settings check, comment moderation ----------
+
+def settings_pages(private, search, status_text):
+    sw = lambda label, on: (f'<div role="switch" aria-label="{label}" aria-checked="{str(on).lower()}"'  # noqa: E731
+                            f' tabindex="0">{label}</div>')
+    return {S.PRIVACY_URL: f"<html><body>{sw('Private account', private)}"
+                           f"{sw('Allow public photos and videos to appear in search engine results', search)}"
+                           "</body></html>",
+            S.ACCOUNT_STATUS_URL: f"<html><body><svg aria-label=\"Home\"></svg>{status_text}</body></html>",
+            S.AUDIENCE_URL: "<html><body>Минимальный возраст: нет. Без ограничений по странам</body></html>"}
+
+
+def test_settings_check_flags_problems(cfg, con, fake_ig, monkeypatch):
+    site, account, _ = fake_ig
+    site["pages"] = settings_pages(True, False, "Your account can't be recommended")
+    sent = []
+    monkeypatch.setattr(telegram, "send", lambda text, *a, **k: sent.append(text) or True)
+    assert instagram.run_health(cfg, con, account, False) == "ok"
+    row = con.execute("SELECT settings_check FROM accounts WHERE nick = 'acc1'").fetchone()[0]
+    assert json.loads(row) == {"private": "problem", "search_engines": "problem", "account_status": "problem",
+                               "age_geo": "ok"}
+    assert any("аккаунт закрыт" in t and "поисковых" in t for t in sent)
+    site["pages"] = settings_pages(False, True, "Your account can be recommended")
+    instagram.run_health(cfg, con, account, False)
+    assert instagram.settings_problems(con, "acc1") == ([], [])
+
+
+COMMENTS = """<html><body><svg aria-label="Home"></svg><ul>%s</ul>
+<div role="dialog" id="menu" style="display:none">%s</div>
+<script>let target = null;
+function opts(n){ target = n; document.getElementById('menu').style.display = 'block'; }
+function del(){ fetch('/__delcomment', {method: 'POST', body: target});
+  document.getElementById('menu').style.display = 'none'; }</script></body></html>"""
+
+
+def comment(n, author, text):
+    return (f'<li><a href="/{author}/">{author}</a> <span dir="auto">{text}</span>'
+            f'<svg aria-label="Comment options" onclick="opts(\'{n}\')" width="10" height="10"></svg></li>')
+
+
+def published_pub(con, url):
+    with con:
+        return con.execute("INSERT INTO publications (account, state, scheduled_at, published_at, ig_url, created_at)"
+                           " VALUES ('acc1', 'published', ?, ?, ?, ?)",
+                           (db.now_iso(), db.now_iso(), url, db.now_iso())).lastrowid
+
+
+def test_comment_moderation_deletes_only_bad_comments(cfg, con, fake_ig):
+    from clips import comments
+    site, account, _ = fake_ig
+    rows = [comment(1, "real_fan", "ахаха лучший момент"), comment(2, "spammer", "заработок 5000 в день, в профиле"),
+            comment(3, "linker", "смотри тут t.me/xxx"), comment(4, "anna_k847310", "класс")]
+    site["pages"]["/reel/MOD001/"] = COMMENTS % ("".join(rows), '<button onclick="del()">Delete</button>')
+    pid = published_pub(con, "https://www.instagram.com/reel/MOD001/")
+    stats = comments.moderate_account(cfg, con, account, False)
+    assert site["deleted"] == ["2", "3", "4"] and stats["deleted"] == 3
+    rules = [r[0] for r in con.execute("SELECT rule FROM comment_actions WHERE publication_id = ? ORDER BY id", (pid,))]
+    assert rules == ["spam", "link", "bot"]
+
+
+def test_comment_moderation_stops_on_the_post_menu(cfg, con, fake_ig, monkeypatch):
+    from clips import comments
+    site, account, _ = fake_ig
+    site["pages"]["/reel/MOD002/"] = COMMENTS % (comment(1, "spammer", "промокод тут"),
+                                                 '<button>Archive</button><button onclick="del()">Delete</button>')
+    published_pub(con, "https://www.instagram.com/reel/MOD002/")
+    sent = []
+    monkeypatch.setattr(telegram, "send", lambda text, *a, **k: sent.append(text) or True)
+    comments.moderate_account(cfg, con, account, False)
+    assert site["deleted"] == [] and any("меню поста" in t for t in sent)
+
+
+def test_comment_moderation_code_never_hides_or_turns_off(cfg):
+    from clips import comments
+    clicks = " ".join(comments.COMMENT_OPTIONS + comments.COMMENT_DELETE + comments.LOAD_MORE).lower()
+    assert not re.search(r"hide|скры|restrict|огранич|turn off|выключ|limit", clicks)

@@ -2044,6 +2044,33 @@ Decisions taken (owner may change them in config):
 
 Owner inputs for addendum 2: the list of Russian film/series cut accounts (`trends.donors_movies`); a cover image per account; the theme of each account (one of `cinema`, `fashion`, `travel`, `food`, `anime`, or a new key with its donors).
 
+## Addendum 3: official Playerok.Клипы rules (implemented, except the midroll position)
+
+Owner addendum of 21.11.2026 (`docs/spec-ru.md`, "Дополнение 3"). Config-driven and tested like addendum 2.
+
+| Part | What the pipeline does | Config | Code | Tests |
+|------|------------------------|--------|------|-------|
+| Dated banner sets | `[[banners.sets]]` with `start` / `end` (Moscow date). The set valid today fills `banners.top` / `banners.midroll`. With no valid set, `build_planned` builds nothing, planned reels wait, and Telegram gets "сборка остановлена" on every plan run until a new set is added. An old config with plain `top` / `midroll` is one undated set. | `banners.sets[].name/start/end/top/midroll/chroma_key` | `config.active_set`, `config.use_banner_set`, `video.NoBannerSet`, `planner.build_planned` | `test_active_banner_set_by_date`, `test_build_stops_without_banner_set`, `test_build_waits_without_banner_set` |
+| .mov / chroma key | A `.mov` with transparency is overlaid as is. An `.mp4` on a plain color is keyed with ffmpeg `chromakey=<color>:0.15:0.05` (top banner and midroll). | `chroma_key = "0x00FF00"` per set | `video.keyed` | `test_animated_mov_banner_with_transparency`, `test_mp4_banner_on_green_is_keyed` |
+| Banner loop | The top banner loops over the whole reel. A source shorter than one loop is rejected at selection (`shorter_than_banner`) and refused at build. The banner check compares each sampled reel frame with the banner frame at that point of the loop (+-1 frame), so animated banners are validated too. | (banner file) | `video.banner_duration`, `video.banner_frame`, `video.validate`, `trends.select` | `test_source_shorter_than_banner_loop_is_rejected`, `test_source_shorter_than_banner_is_rejected` |
+| Safe zones | The banner must stay clear of Instagram's UI: `top_y` >= top band and the banner's bottom above the bottom band (config check); left/right margins at build (the width depends on the file). Numbers are the 14% / 35% / 6% bands from third-party guides; Meta publishes none. | `[compose.safe_zone]` top 269, bottom 672, left 65, right 120 | `config.validate`, `video.check_banner_place` | `test_banner_outside_safe_zone` |
+| Default template | `square` on black is the default; `circle` on an art background only as an experiment, because the rules forbid "посторонние элементы ... для привлечения внимания". | `accounts[].template` | `config.load` | conftest pins the circle for layout tests |
+| Binding code | `accounts[].bind_code`: while the account is not bound, its next reel goes out with the code as the whole caption (no pool caption used). After publishing, Telegram asks the operator to confirm in the Playerok bot and send `/bound <nick>` (or CLI `account-bound`). A failed binding reel is planned again. | `accounts[].bind_code` | `planner.needs_bind_post`, `insert_publication`, `telegram.handle_update` | `test_bind_code_goes_out_once_as_caption`, `test_bot_bound_and_limit` |
+| Settings check | `health` also checks: not private, search engines allowed, "Account status" green, no age/geo limits. Each check is ok / problem / unknown (page or switch not found). Problems go to Telegram with a screenshot; the submit message lists problems and what to check by hand. | selectors `PRIVACY_URL`, `*_SWITCH`, `ACCOUNT_STATUS_URL`, `TEXT_STATUS_*`, `AUDIENCE_URL`, `TEXT_AGE_GEO_*` (guesses) | `instagram.check_settings`, `settings_problems`, `run_health` | `test_settings_check_flags_problems` (fake Instagram) |
+| Comment moderation | Daily `moderate-comments` (timer 14:20): reels of the last 30 days, comments classified as link / spam / bait / bot by config regexes, deleted through the comment's own menu, logged in `comment_actions`. Never hides, limits or turns off comments. If the menu that opens has post items (edit, archive, ...), it is closed and the run stops with an alert (H1). | `[comments]` | `clips/comments.py` | `test_comment_moderation_deletes_only_bad_comments`, `test_comment_moderation_stops_on_the_post_menu`, `test_comment_moderation_code_never_hides_or_turns_off` |
+| Engagement risk | 50k+ views with (likes + comments) / views below the threshold adds "Риск отказа" to the submit message. Stats store `last_likes`, `last_comments`. | `playerok.risk_min_views`, `risk_min_engagement_pct` | `submit.engagement_risk`, `submit_warnings` | `test_engagement_risk`, `test_submit_message_carries_warnings` |
+| Author limit | One limit for the whole network. The operator enters `/limit <остаток> <всего>` from "Мои лимиты"; the summary and submit messages show it; above 50% used, one "ask for a higher limit" alert per entry. | `playerok.limit_alert_used_pct` | `submit.set_author_limit`, `limit_text`, `limit_alerts` | `test_author_limit_alert_once_over_half` |
+| Caption languages | The weekly report adds the approval share per caption language (all decisions so far), next to views and the Russian audience share. | | `reports.weekly` | existing report tests |
+| Hard bans | No post deletion or editing (existing H1 test, plus the comment-menu guard); no paid promotion (test: no boost/promote words in the browser code); no other advertisers: only configured Playerok sets are used, and donor reels and captions with ad markers (`erid`, `#реклама`, `промокод`, `広告`, `#pr`, ...) are filtered out. | `filter.blocked_patterns` | | `test_no_paid_promotion_code`, `test_no_post_takedown_code` |
+
+Not done yet:
+- Midroll position "strictly as in the creatives folder": waits for the owner's banner archive; today the position follows `banners.midroll_*`.
+- All new selectors (settings pages, comments) are guesses, to verify in dry-run screenshots on a real account.
+
+Decisions taken (owner may change them):
+- The binding code is the whole caption of one reel. If the Playerok bot wants it on screen instead, `compose.text_overlay` can carry it.
+- Settings that could not be checked are not treated as problems; the operator checks them by hand before submitting.
+
 ## 9. Requirements traceability (spec module -> tasks)
 
 | Spec module | Tasks |

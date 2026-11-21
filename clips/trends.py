@@ -163,6 +163,7 @@ def rank_score(views, median, duration, shares, share_med, cfg) -> float:
 
 def select(cfg, con, dry) -> dict:
     now, counts = datetime.now(timezone.utc), {}
+    loop = video.banner_duration(cfg)  # addendum 3: a reel shorter than one banner loop is rejected
     for s in con.execute("SELECT * FROM sources WHERE state = 'new'").fetchall():
         reason = blocked_reason(s["caption"], s["donor"], cfg)
         score = None
@@ -172,6 +173,8 @@ def select(cfg, con, dry) -> dict:
             age = (now - db.parse_iso(s["posted_at"])).total_seconds() / 3600 if s["posted_at"] else float("inf")
             median = donor_median(con, cfg, s["donor"], s["id"])
             state, reason = decide(s["views"], age, s["duration"], median, cfg["trends"])
+            if state != "rejected" and s["duration"] is not None and s["duration"] < loop:
+                state, reason = "rejected", "shorter_than_banner"
             if state == "selected":
                 score = rank_score(s["views"], median, s["duration"], s["shares"],
                                    share_median(con, cfg, s["donor"], s["id"]), cfg)

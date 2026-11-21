@@ -20,7 +20,9 @@ log = logging.getLogger(__name__)
 REASON_RU = {"stalled": "застой", "age": "19-й день", "account_in_danger": "аккаунт в опасности"}
 STATUS_RU = {"paused": "ограничение действий, пауза", "check": "проверка", "banned": "бан"}
 HELP = ("Кнопки под сообщениями: Подано / Одобрено / Отклонено / Проверку прошёл.\n"
-        "/status: сводка\n/geo <номер> <процент>: доля просмотров из России")
+        "/status: сводка\n/geo <номер> <процент>: доля просмотров из России\n"
+        "/bound <ник>: аккаунт привязан в боте Playerok\n"
+        "/limit <остаток> <всего>: лимит автора из раздела «Мои лимиты»")
 
 
 class TelegramError(Exception):
@@ -77,7 +79,7 @@ def num(n) -> str:
     return f"{int(n):,}".replace(",", " ")
 
 
-def msg_submit(pub: dict, cfg) -> tuple[str, list]:
+def msg_submit(pub: dict, cfg, warnings=()) -> tuple[str, list]:
     from clips.submit import payout_rub
     p, tz = cfg["playerok"], ZoneInfo(cfg["timezone"])
     published = db.parse_iso(pub["published_at"]).astimezone(tz)
@@ -95,6 +97,7 @@ def msg_submit(pub: dict, cfg) -> tuple[str, list]:
     if pub.get("needs_screen_recording"):
         lines += ["⚠️ Нужна запись экрана статистики с телефона",
                   f"Запишите долю просмотров из России: /geo {pub['id']} &lt;процент&gt;"]
+    lines += [html.escape(w) for w in warnings]
     buttons = [[("Подано", f"sub:{pub['id']}")], [("Одобрено", f"ok:{pub['id']}"), ("Отклонено", f"rej:{pub['id']}")]]
     return "\n".join(lines), buttons
 
@@ -152,6 +155,23 @@ def handle_update(con, cfg, update, pending: dict) -> list[tuple[int, str]]:
         with con:
             con.execute("UPDATE publications SET ru_audience_pct = ? WHERE id = ?", (int(m[2]), int(m[1])))
         return [(chat, f"pub#{m[1]}: Россия {m[2]}%")]
+    if text.startswith("/bound"):
+        m = re.fullmatch(r"/bound\s+@?([\w.]+)", text)
+        nicks = {a["nick"] for a in cfg["accounts"]}
+        if not m or m[1] not in nicks:
+            return [(chat, "Формат: /bound <ник аккаунта из конфига>")]
+        with con:
+            con.execute("UPDATE accounts SET bound_at = ?, updated_at = ? WHERE nick = ?",
+                        (db.now_iso(), db.now_iso(), m[1]))
+        return [(chat, f"@{m[1]}: привязан к Playerok")]
+    if text.startswith("/limit"):
+        m = re.fullmatch(r"/limit\s+(\d+)\s+(\d+)", text)
+        if not m or int(m[1]) > int(m[2]) or int(m[2]) == 0:
+            return [(chat, "Формат: /limit <остаток> <всего>, остаток не больше общего лимита")]
+        from clips import submit
+        submit.set_author_limit(con, int(m[2]), int(m[1]))
+        return [(chat, submit.limit_text(con))] + \
+            [(chat, t) for t in submit.limit_alerts(con, cfg["playerok"]["limit_alert_used_pct"])]
     if chat in pending:
         kind, pid = pending[chat]
         if kind == "ok":

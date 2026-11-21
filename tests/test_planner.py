@@ -160,3 +160,33 @@ def test_captions_follow_account_theme(cfg, con, world):
     planner.plan(cfg, con, False, now=now, rng=random.Random(1))
     got = {r["account"]: r["caption"] for r in pubs(con)}
     assert got == {"acc1": "アニメの夜", "acc2": "朝ごはん"}
+
+
+def test_bind_code_goes_out_once_as_caption(cfg, con, world):
+    add_sources, add_captions, now = world
+    add_sources(4)
+    add_captions(4)
+    cfg["accounts"][0]["bind_code"] = "PLK-12345"
+    planner.plan(cfg, con, False, now=now, rng=random.Random(1))
+    bind = [r for r in pubs(con) if r["is_bind"]]
+    assert [(r["account"], r["caption"], r["caption_id"]) for r in bind] == [("acc1", "PLK-12345", None)]
+    with con:
+        con.execute("UPDATE publications SET state = 'published' WHERE is_bind = 1")
+    planner.plan(cfg, con, False, now=now + timedelta(days=1), rng=random.Random(2))
+    assert sum(r["is_bind"] for r in pubs(con)) == 1          # one published reel with the code is enough
+    with con:
+        con.execute("UPDATE publications SET state = 'failed' WHERE is_bind = 1")
+    planner.plan(cfg, con, False, now=now + timedelta(days=2), rng=random.Random(3))
+    assert sum(r["is_bind"] for r in pubs(con)) == 2          # a failed one is retried
+
+
+def test_build_waits_without_banner_set(cfg, con, world, monkeypatch):
+    from clips import config, telegram
+    add_sources, add_captions, now = world
+    add_sources(2)
+    add_captions(2)
+    sent = []
+    monkeypatch.setattr(telegram, "send", lambda text, *a, **k: sent.append(text) or True)
+    config.use_banner_set(cfg, None)
+    planner.plan(cfg, con, False, now=now, rng=random.Random(1))   # plans, then tries to build
+    assert {r["state"] for r in pubs(con)} == {"planned"} and "набор баннеров" in sent[0]

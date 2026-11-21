@@ -30,9 +30,10 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
    sudo systemctl restart systemd-journald && sudo systemctl daemon-reload
    sudo systemctl enable --now adspower clips-bot
    sudo systemctl enable --now clips-trends.timer clips-plan.timer clips-publish.timer clips-stats.timer \
-     clips-summary.timer clips-report.timer clips-notion.timer clips-maintenance.timer clips-captions.timer
+     clips-summary.timer clips-report.timer clips-notion.timer clips-maintenance.timer clips-captions.timer \
+     clips-comments.timer
    ```
-5. Проверка: `systemctl list-timers 'clips-*'` показывает 9 таймеров со временем следующего запуска.
+5. Проверка: `systemctl list-timers 'clips-*'` показывает 10 таймеров со временем следующего запуска.
    Проверка AdsPower: `curl -s "http://127.0.0.1:50325/api/v1/browser/active?user_id=<id профиля>" -H "Authorization: Bearer $ADSPOWER_API_KEY"`
    должен вернуть `"code":0`.
 
@@ -49,6 +50,7 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
 | Синхронизация Notion | каждый час |
 | Обслуживание и бэкап | 04:30 |
 | Сбор японских подписей | воскресенье 05:10 |
+| Модерация комментариев | 14:20 |
 
 Окно публикаций (10:00-22:00) и лимиты задаются в `config.toml`, а не здесь.
 
@@ -77,10 +79,16 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
    без этого не видна статистика по странам.
 3. Добавить блок `[[accounts]]` в `config.toml`: ник, `adspower_id`, `daily_limit` (начинать с 1),
    `caption_lang` (`japanese` или `none`), `theme` (тема: `cinema`, `fashion`, `travel`, `food`, `anime`),
-   `template` (`circle` или `square`), `donor_group` (`memes` или `movies`), фон (только для `circle`), `cover`.
+   `template` (`square` по умолчанию; `circle` на фоне-арте только как эксперимент: правила Playerok запрещают
+   посторонние элементы для привлечения внимания), `donor_group` (`memes` или `movies`), фон (только для `circle`), `cover`.
 4. Положить картинку фона и обложку (вертикальная 9:16, в теме аккаунта) по указанным путям.
    Ник и аватар в Instagram выбрать в той же теме (пример: японский фан-аккаунт аниме).
 5. `python -m clips sync-accounts`, `python -m clips health --account <ник>`, `python -m clips set-bio --account <ник>`.
+6. В Instagram проверить настройки: аккаунт открытый, разрешено появление в поисковых системах, «Статус аккаунта»
+   весь зелёный, нет ограничений по возрасту и странам. `health` проверяет это сам и пишет в Telegram, если что-то не так.
+7. Привязка к Playerok: бот Playerok выдаёт код. Вписать его в `bind_code` аккаунта. Следующий ролик аккаунта выйдет
+   с этим кодом вместо подписи, и наш бот пришлёт ссылку. Подтвердить привязку в боте Playerok, затем отправить
+   нашему боту `/bound <ник>`. Пока аккаунт не отмечен привязанным, в сообщениях «Пора подавать» будет предупреждение.
 
 ## 3. Аккаунт на проверке (сообщение 🔴 в Telegram)
 
@@ -98,8 +106,14 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
    `/geo <номер> <процент просмотров из России>` нашему боту.
 3. Нажать "Подано". Когда Playerok ответит: "Одобрено" (бот спросит сумму) или "Отклонено" (спросит причину).
 4. `/status` в боте показывает сводку в любой момент.
+5. Перед подачей прочитать предупреждения в сообщении: «Риск отказа» (мало лайков и комментариев для таких просмотров),
+   не привязан аккаунт, проблемы в настройках, что проверить вручную.
+6. Лимит автора общий на все аккаунты. После каждой подачи вводить остаток из раздела «Мои лимиты» бота Playerok:
+   `/limit <остаток> <всего>`. Когда использовано больше половины, наш бот напомнит запросить увеличение.
 
 Опубликованные ролики и баннер в них не трогать 30 дней после оплаты (правило Playerok).
+Запрещено: удалять ролики, скрывать баннер, платно продвигать ролики, ставить на эти аккаунты чужую рекламу,
+скрывать или отключать комментарии. Удалять можно только спам-комментарии (это делает `moderate-comments`).
 
 ## 5. Instagram поменял интерфейс (публикация падает с `LookupError`)
 
@@ -109,8 +123,22 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
 
 ## 6. Сменить баннеры (новая кампания Playerok)
 
-1. Положить новые файлы в `assets/banners/`, поправить `[banners]` в `config.toml`.
-2. Собрать пробный ролик (`build`) и проверить (`validate`), посмотреть на телефоне.
+1. Положить новые файлы в `assets/banners/`: лучше `.mov` с прозрачностью. Если баннер `.mp4` на однотонном фоне,
+   указать цвет фона в `chroma_key` (например `"0x00FF00"` для зелёного).
+2. Добавить в `config.toml` новый блок `[[banners.sets]]` с названием, датами `start` и `end`, файлами `top` и `midroll`.
+   Старый набор можно оставить: каждый день берётся тот, чьи даты включают сегодня.
+3. Собрать пробный ролик (`build`) и проверить (`validate`), посмотреть на телефоне: баннер не должен уходить
+   под надпись Reels сверху, кнопки справа и подпись снизу (границы в `[compose.safe_zone]`).
+
+Если набор закончился, а нового нет, сборка останавливается, и раз в день приходит «⛔️ Сборка остановлена».
+Запланированные ролики ждут и соберутся после добавления нового набора.
+
+## 6а. Модерация комментариев
+
+Раз в день `moderate-comments` проходит ролики за последние 30 дней и удаляет ссылки, спам, байт и ботов
+по правилам из `[comments]`. Что удалено, видно в таблице `comment_actions`. Если модерация остановилась
+с сообщением «открылось меню поста», значит Instagram поменял интерфейс: поправить селекторы в начале
+`clips/comments.py` и проверить `python -m clips moderate-comments --dry-run`.
 
 ## 7. Логи
 
@@ -134,7 +162,8 @@ systemctl list-units 'clips@*' --state=active    # должно быть пус�
 sudo -u clips rm -f /opt/clips/data/clips.db-wal /opt/clips/data/clips.db-shm
 sudo -u clips cp /opt/clips/data/backups/clips-ГГГГММДД.db /opt/clips/data/clips.db
 sudo systemctl start clips-bot && sudo systemctl start clips-trends.timer clips-plan.timer clips-publish.timer \
-  clips-stats.timer clips-summary.timer clips-report.timer clips-notion.timer clips-maintenance.timer clips-captions.timer
+  clips-stats.timer clips-summary.timer clips-report.timer clips-notion.timer clips-maintenance.timer clips-captions.timer \
+  clips-comments.timer
 ```
 
 ## 9. Раз в месяц

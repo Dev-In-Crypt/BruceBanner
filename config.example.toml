@@ -12,13 +12,14 @@ submit_by_day = 19
 stall_growth_pct_48h = 5.0
 screen_recording_views = 500000
 wait_for_next_step = true               # stalled but projected to cross next 50k step within 48 h -> wait
+risk_min_views = 50000                  # addendum 3: from here, low engagement is flagged "риск отказа"
+risk_min_engagement_pct = 1.0           # (likes + comments) / views * 100 below this -> risk (tune on the pilot)
+limit_alert_used_pct = 50               # author limit (one for the network): alert above this share used
 
 [banners]
-top = "assets/banners/top.png"          # transparent PNG sticker (or MP4/MOV, looped). Nov 2026: GTA VI banner
 top_y = 280                             # px from top edge; below Instagram's own header (section 1.1)
 top_height_px = 360                     # banner is scaled to this height, width keeps aspect, centered
 top_min_height_px = 320                 # >= 1920/6, never lower
-midroll = "assets/banners/voiced.mp4"   # voiced banner animation; must have an audio stream; "" disables
 midroll_has_alpha = false               # true if midroll is a VP9 WebM with transparency
 midroll_box = { x = 0, y = 660, w = 1080 }   # where the animation is drawn on the frozen frame; height keeps aspect
 midroll_min_source_sec = 12
@@ -26,6 +27,17 @@ midroll_short_until_sec = 20
 midroll_short_insert_sec = 10           # clamped to <= duration - 3 (10 also satisfies the 10-20 s rule)
 midroll_long_window_sec = [10, 20]
 midroll_long_insert_sec = 12
+# Playerok banner sets with dates (addendum 3). The set valid today (Moscow time) is used. After the last
+# one ends, building stops and Telegram gets an alert on every plan run until a new set is added here.
+# Files: .mov with transparency (preferred) or a transparent .png; an .mp4 on a plain color needs chroma_key.
+# Only Playerok banners: never another advertiser's banner or any other ad on these accounts.
+[[banners.sets]]
+name = "GTA VI"                         # 01.11-30.11.2026 the GTA VI version is mandatory
+start = 2026-11-01
+end = 2026-11-30
+top = "assets/banners/top.png"          # looped over the whole reel; reels shorter than one loop are rejected
+midroll = "assets/banners/voiced.mp4"   # voiced banner animation; must have an audio stream; "" disables
+chroma_key = ""                         # e.g. "0x00FF00" for an .mp4 on green; "" = the file has transparency
 
 [compose]
 width = 1080
@@ -47,6 +59,12 @@ text_overlay = false                    # optional text plate (spec module 7, op
 text_y = 1660                           # below the circle
 text_size = 56
 banner_check_max_diff = 8.0             # mean abs pixel diff (0-255) between banner and its area in the reel
+
+[compose.safe_zone]                     # px of a 1080x1920 reel covered by Instagram's UI; the banner stays out
+top = 269                               # "Reels" header (14%); third-party guides, Meta publishes no numbers
+bottom = 672                            # nick, caption, music (35%)
+left = 65
+right = 120                             # like / comment / share buttons
 
 [trends]
 # Picked 18.11.2026 from 30 meme pages found by Russian meme hashtags (docs/DONORS.md): typical views 3k-229k
@@ -83,6 +101,9 @@ blocked_patterns = [
   '\bхач(и|ик|ей|ам)?\b', '\bчурк', '\bнигг', '\bжид(ы|ов|овск\w*)?\b', '\bхохл', '\bкацап', '\bмоскал',
   # religion
   '\bбог\b', '\bаллах', '\bиисус', '\bхрист', '\bцерк', '\bмечет', '\bислам', '\bправослав', '\bмусульм', '\bрелиги', '\bмолитв',
+  # ads of other advertisers (addendum 3: no other banners or ads on these accounts); "erid" marks Russian ads
+  '\berid\b', '#реклам', '\bреклама\b', '\bпромокод', '\bспонсор', '#ad\b', '#sponsored', '\bpaid partnership',
+  '広告', '#pr\b', 'pr案件', 'タイアップ', 'プロモーション',
   # Japanese (for our own caption pool; plain substrings, Japanese has no word boundaries)
   '政治', '選挙', '首相', '大統領', '戦争', '軍隊', '兵器', '犯罪', '殺人', '暴力', 'ヤクザ', '暴力団',
   '麻薬', '大麻', 'ドラッグ', '差別', '宗教', '神社', '寺院', '教会', '祈り',
@@ -161,14 +182,27 @@ travel = ["visitjapanjp"]               # unverified candidates: "nationalpark_j
 food = ["kurashiru", "delishkitchen.tv"]
 anime = ["onepiece_staff"]
 
+[comments]                              # addendum 3: daily comment moderation under our bannered reels
+# Only deletes comments. Hiding comments, limiting or turning commenting off is forbidden by Playerok.
+days = 30                               # reels younger than this are checked
+load_more_clicks = 5                    # "load more comments" presses per reel
+max_deletes_per_run = 30                # per account and run, so the account never acts like a bot
+# Python regexes, matched against the comment lowercased with "ё" replaced by "е". Tune on the pilot.
+link_pattern = '(https?://|www\.|t\.me/|\b[\w-]+\.(ru|com|me|io|link|xyz|top|site|shop)\b)'
+spam_patterns = ['подпиш', 'заработ', 'доход', 'в профил', 'в шапке', 'перейди', 'бесплатн', 'промокод',
+                 'крипт', 'ставк', 'казино', 'follow me', 'check my', 'dm me', 'earn']
+bait_patterns = ['ставь лайк', 'лайк если', 'кто смотрит в 20\d\d', 'like if', 'who.s watching in 20\d\d']
+bot_name_pattern = '[a-z]+[._]?[a-z]*\d{5,}'   # usernames like anna_k847310
+
 [[accounts]]
 nick = "example_account"
 adspower_id = "jabc123"                 # AdsPower profile user_id
-background = "assets/backgrounds/example_account.jpg"
+background = "assets/backgrounds/example_account.jpg"   # only for template "circle"
 daily_limit = 1
 caption_lang = "japanese"               # japanese | russian | none (post captions and bio)
 theme = "anime"                         # caption/bio theme: a key of captions.donors_<caption_lang> (addendum 1b)
-template = "circle"                     # circle | square (addendum 7b)
+template = "square"                     # square (default, addendum 3) | circle (art background: only as an experiment)
 donor_group = "memes"                   # memes | movies: which video donors feed this account (addendum 2b)
 cover = "assets/covers/example_account.jpg"   # 9:16 image uploaded as the reel cover; "" = Instagram's frame
 overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)
+bind_code = ""                          # code from the Playerok bot: the next reel goes out with it as its caption

@@ -6,7 +6,7 @@ from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from clips import captions, db, telegram, trends, video
+from clips import captions, config, db, telegram, trends, video
 
 log = logging.getLogger(__name__)
 
@@ -119,17 +119,31 @@ def instagram_status(con, nick) -> str:
     return row["status"] if row else "active"
 
 
+def needs_bind_post(con, account) -> bool:
+    """Addendum 3: an unbound account with a code from the Playerok bot posts one reel with that code."""
+    code = account.get("bind_code")
+    if not code:
+        return False
+    row = con.execute("SELECT bound_at FROM accounts WHERE nick = ?", (account["nick"],)).fetchone()
+    if row and row["bound_at"]:
+        return False
+    return con.execute("SELECT 1 FROM publications WHERE account = ? AND is_bind = 1 AND caption = ? "
+                       "AND state != 'failed'", (account["nick"], code)).fetchone() is None
+
+
 def insert_publication(con, account, source_id, attempt, slot) -> int:
     """One transaction: reserve a caption and insert the publication (a rollback frees the caption)."""
     with con:
-        cap = captions.take_caption(con, account["caption_lang"], "pub:pending", account.get("theme", ""))
+        bind = needs_bind_post(con, account)
+        cap = (None, account["bind_code"]) if bind else \
+            captions.take_caption(con, account["caption_lang"], "pub:pending", account.get("theme", ""))
         if cap is None:
             raise NoCaption
         cid, text = cap
         pid = con.execute(
             "INSERT INTO publications (source_id, account, attempt, state, scheduled_at, caption, caption_id,"
-            " caption_lang, created_at) VALUES (?, ?, ?, 'planned', ?, ?, ?, ?, ?)",
-            (source_id, account["nick"], attempt, db.iso(slot), text, cid, account["caption_lang"],
+            " caption_lang, is_bind, created_at) VALUES (?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?)",
+            (source_id, account["nick"], attempt, db.iso(slot), text, cid, account["caption_lang"], int(bind),
              db.now_iso())).lastrowid
         if cid:
             con.execute("UPDATE captions SET used_for = ? WHERE id = ?", (f"pub:{pid}", cid))
@@ -148,6 +162,16 @@ def expire_stale(cfg, con, now):
 
 def build_planned(cfg, con):
     by_nick = {a["nick"]: a for a in cfg["accounts"]}
+    if not cfg["banners"]["top"]:  # addendum 3: the dated banner set ended; planned reels wait for a new one
+        waiting = con.execute("SELECT COUNT(*) FROM publications WHERE state = 'planned'").fetchone()[0]
+        last = max((st["end"] for st in cfg["banners"]["sets"] if "end" in st), default=None)
+        mark, today = cfg["data"] / "tmp" / "no_banner_set_alert", str(config.today(cfg))
+        if not mark.exists() or mark.read_text() != today:  # once a day, not on every hourly plan run
+            if telegram.send(f"⛔️ Сборка остановлена: набор баннеров Playerok закончился ({last}). "
+                             f"Загрузите новый набор в banners.sets. Ждут сборки: {waiting}."):
+                mark.write_text(today)
+        log.warning("no active banner set, %s planned reels wait", waiting)
+        return
     for pub in con.execute("SELECT * FROM publications WHERE state = 'planned' ORDER BY scheduled_at").fetchall():
         account = by_nick.get(pub["account"])
         if not account:

@@ -46,3 +46,19 @@ BIO_TEXTAREA = ['textarea#pepBio', 'textarea[name="biography"]',
                 'textarea[aria-label="Bio"]', 'textarea[aria-label="О себе"]']
 BIO_SUBMIT = ['div[role="button"]:text-is("Submit")', 'div[role="button"]:text-is("Отправить")',
               'button:text-is("Submit")', 'button:text-is("Отправить")']
+
+# ---- account settings checked before submitting to Playerok (addendum 3) ----
+# Guesses for the web UI: verify on a real account. A check that finds nothing reports "unknown".
+PRIVACY_URL = "/accounts/who_can_see_your_content/"
+PRIVATE_SWITCH = r"private account|закрытый аккаунт"          # accessible name; on = problem
+SEARCH_ENGINES_SWITCH = r"search engine|поисков"             # on = ok
+ACCOUNT_STATUS_URL = "/accounts/account_status/"
+TEXT_STATUS_BAD = ("can't be recommended", "cannot be recommended", "not eligible", "goes against our community",
+                   "features you can't use", "нельзя рекомендовать", "не может быть рекомендован",
+                   "удаленный контент", "удалённый контент", "функции, которые вы не можете")
+TEXT_STATUS_OK = ("can be recommended", "no issues", "может быть рекомендован", "нет проблем")
+AUDIENCE_URL = "/accounts/professional_account_settings/"
+TEXT_AGE_GEO_BAD = ("minimum age: 1", "minimum age 1", "country restrictions on", "visible only in",
+                    "минимальный возраст: 1", "ограничения по странам включены", "видно только в")
+TEXT_AGE_GEO_OK = ("no age restriction", "no country restriction", "без ограничений по возрасту",
+                   "без ограничений по странам")

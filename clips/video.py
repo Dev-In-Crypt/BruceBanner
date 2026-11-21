@@ -11,6 +11,11 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 log = logging.getLogger(__name__)
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
+CHROMA = "0.15:0.05"  # chromakey similarity:blend for .mp4 banners on a plain color (addendum 3)
+
+
+class NoBannerSet(ValueError):
+    """No Playerok banner set is valid today: building stops until a new set is in the config."""
 
 
 def run(cmd: list[str]) -> str:
@@ -111,6 +116,48 @@ def banner_x(cfg, bw) -> int:
     return (cfg["compose"]["width"] - bw) // 2
 
 
+def keyed(cfg, path) -> str:
+    """Filter prefix that turns the plain background of an .mp4 banner transparent ('' for .mov / .png)."""
+    ck = cfg["banners"].get("chroma_key")
+    return f"chromakey={ck}:{CHROMA}," if ck and Path(path).suffix.lower() == ".mp4" else ""
+
+
+def banner_duration(cfg) -> float:
+    """One loop of an animated top banner, 0 for a still image or when no banner set is active."""
+    top = cfg["banners"]["top"]
+    return 0.0 if not top or is_image(top) else stream_duration(top)
+
+
+def banner_frame(cfg, t=0.0) -> Image.Image:
+    """The top banner as drawn in the reel (RGBA, scaled), at time t of its loop."""
+    top = cfg["banners"]["top"]
+    if is_image(top):
+        img = Image.open(top).convert("RGBA")
+    else:
+        v = probe(top)["video"]
+        n, d = map(int, v["r_frame_rate"].split("/"))
+        t = min(t, max(0.0, banner_duration(cfg) - 1.5 * d / n))  # seeking past the last frame returns nothing
+        p = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(top), "-frames:v", "1",
+                            "-vf", f"{keyed(cfg, top)}format=rgba", "-f", "image2pipe", "-vcodec", "png", "-"],
+                           capture_output=True)
+        if p.returncode != 0 or not p.stdout:
+            raise RuntimeError(f"cannot grab banner frame at {t}s: {p.stderr[-300:]!r}")
+        img = Image.open(io.BytesIO(p.stdout)).convert("RGBA")
+    return img.resize(banner_size(cfg), Image.LANCZOS)
+
+
+def check_banner_place(cfg) -> None:
+    """Addendum 3: the banner must not sit under Instagram's UI. Raises ValueError."""
+    z, W = cfg["compose"].get("safe_zone"), cfg["compose"]["width"]
+    if not z:
+        return
+    bw, _ = banner_size(cfg)
+    x = banner_x(cfg, bw)
+    if x < z["left"] or x + bw > W - z["right"]:
+        raise ValueError(f"banner {bw}px wide at x={x} leaves the safe zone (left {z['left']}, right {z['right']}); "
+                         f"lower banners.top_height_px")
+
+
 def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None, template="circle"):
     """Frame + video in a circle or square + top banner sticker (+ optional text plate). One ffmpeg call."""
     c, b = cfg["compose"], cfg["banners"]
@@ -135,7 +182,7 @@ def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None,
         f"[0:v]fps={fps},scale={D}:{D}:force_original_aspect_ratio=increase,crop={D}:{D},setsar=1,"
         f"pad={W}:{H}:{X}:{Y}:black[c];"
         f"[c][1:v]overlay=0:0:shortest=1[f];"
-        f"[2:v]fps={fps},scale={bw}:{bh}[b];"
+        f"[2:v]{keyed(cfg, b['top'])}fps={fps},scale={bw}:{bh}[b];"
         f"[f][b]overlay={banner_x(cfg, bw)}:{b['top_y']}:shortest=1{drawtext},format=yuv420p[v];"
         f"{audio}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad[a]")
     run(args + ["-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-t", dur,
@@ -175,7 +222,7 @@ def insert_midroll(base, t, cfg, out) -> float:
     graph = (
         "[0:v]split=2[v0][v1];[0:a]asplit=2[a0][a1];"
         f"[v0]trim=end={t},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={m}[pre];"
-        f"[1:v]fps={fps},scale={box['w']}:-2,setpts=PTS-STARTPTS+{t}/TB[mid];"
+        f"[1:v]{keyed(cfg, b['midroll'])}fps={fps},scale={box['w']}:-2,setpts=PTS-STARTPTS+{t}/TB[mid];"
         f"[pre][mid]overlay={box['x']}:{box['y']}:eof_action=pass[va];"
         f"[v1]trim=start={t},setpts=PTS-STARTPTS[vb];"
         "[va][vb]concat=n=2:v=1:a=0,format=yuv420p[v];"
@@ -219,19 +266,23 @@ def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
         errors.append(f"duration {p['duration']:.2f}s, expected {expected_duration:.2f}s")
     if errors:
         return errors
-    if not is_image(b["top"]):
-        log.info("banner check skipped: animated banner")
-        return errors
     bw, bh = banner_size(cfg)
-    banner = Image.open(b["top"]).convert("RGBA").resize((bw, bh), Image.LANCZOS)
-    mask = banner.getchannel("A").point(lambda x: 255 if x == 255 else 0)  # compare opaque pixels only
     x0 = banner_x(cfg, bw)
     band = (x0, b["top_y"], x0 + bw, b["top_y"] + bh)
+    loop = banner_duration(cfg)
     times = [0.5, p["duration"] / 2, p["duration"] - 0.5]
     if midroll_window:
         times.append(sum(midroll_window) / 2)
     for t in times:
-        d = region_diff(grab_frame(path, t).crop(band), banner.convert("RGB"), mask=mask)
+        base = t  # time in the reel before the midroll was inserted (the frame, banner included, freezes)
+        if midroll_window and t >= midroll_window[0]:
+            base = midroll_window[0] if t < midroll_window[1] else t - (midroll_window[1] - midroll_window[0])
+        # an animated banner: compare with its frame at that point of the loop, +-1 frame for rounding
+        frames = [banner_frame(cfg)] if not loop else \
+            [banner_frame(cfg, (base + k / c["fps"]) % loop) for k in (-1, 0, 1)]
+        reel = grab_frame(path, t).crop(band)
+        d = min(region_diff(reel, f.convert("RGB"), mask=f.getchannel("A").point(lambda x: 255 if x == 255 else 0))
+                for f in frames)  # opaque banner pixels only
         if d > c["banner_check_max_diff"]:
             errors.append(f"banner mismatch at t={t:.1f}s: diff={d:.1f}")
     return errors
@@ -242,15 +293,20 @@ def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
 def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
     """Build one reel for one account, validate it, return metadata. Raises ValueError if invalid."""
     c, b = cfg["compose"], cfg["banners"]
+    if not b["top"]:
+        raise NoBannerSet("no Playerok banner set is valid today: add a new set to banners.sets")
+    check_banner_place(cfg)
     info = probe(src)
     if not info["video"]:
         raise ValueError(f"no video stream in {src}")
+    if info["duration"] < banner_duration(cfg):  # addendum 3: the banner plays in full at least once
+        raise ValueError(f"source {info['duration']:.1f}s is shorter than the banner loop {banner_duration(cfg):.1f}s")
     t = midroll_at(info["duration"], b) if use_midroll else None
     out = Path(out)
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
         frame = Path(tmp) / "frame.png"
-        template = account.get("template", "circle")
+        template = account.get("template", "square")
         make_frame_png(account.get("background"), cfg, frame, template)
         m = 0.0
         if t is None:
