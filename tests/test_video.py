@@ -1,5 +1,6 @@
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -142,21 +143,24 @@ def ff(*args):
     subprocess.run(["ffmpeg", "-v", "error", "-y", *map(str, args)], check=True)
 
 
-def moving_banner(path, seconds, codec):
-    """A red square moving right on a transparent 600x480 canvas: like an animated Playerok banner."""
-    bg = "black@0.0" if codec == "qtrle" else "0x00FF00"
-    ff("-f", "lavfi", "-i", f"color=c={bg}:s=600x480:r=30:d={seconds},format=rgba",
-       "-f", "lavfi", "-i", f"color=c=red:s=200x200:r=30:d={seconds},format=rgba",
-       "-filter_complex", "[0][1]overlay=x='t*80':y=140,format=" + ("argb" if codec == "qtrle" else "yuv420p"),
-       "-c:v", codec, path)
+def moving_banner(path, seconds, codec, size="600x400", box=380, pix=None):
+    """A red square moving right on a transparent canvas: like an animated Playerok banner."""
+    bg = "0x13FF08" if codec == "libx264" else "black@0.0"
+    pix = pix or {"qtrle": "argb", "libx264": "yuv420p", "prores_ks": "yuva444p10le"}[codec]
+    ff("-f", "lavfi", "-i", f"color=c={bg}:s={size}:r=30:d={seconds},format=rgba",
+       "-f", "lavfi", "-i", f"color=c=red:s={box}x{box}:r=30:d={seconds},format=rgba",
+       "-filter_complex", f"[0][1]overlay=x='100+t*30':y=10,format={pix}",
+       *(["-profile:v", "4444"] if codec == "prores_ks" else []), "-c:v", codec, path)
     return str(path)
 
 
 def test_active_banner_set_by_date(cfg):
     from datetime import date
     from clips import config
-    cfg["banners"]["sets"] = [{"name": "nov", "start": date(2026, 11, 1), "end": date(2026, 11, 30)},
-                              {"name": "dec", "start": date(2026, 12, 1), "end": date(2026, 12, 31)}]
+    cfg["banners"]["sets"] = [
+        {"name": "nov", "platform": "instagram", "start": date(2026, 11, 1), "end": date(2026, 11, 30)},
+        {"name": "tiktok", "platform": "tiktok", "start": date(2026, 12, 1), "end": date(2026, 12, 31)},
+        {"name": "dec", "platform": "instagram", "start": date(2026, 12, 1), "end": date(2026, 12, 31)}]
     assert config.active_set(cfg, date(2026, 11, 30))["name"] == "nov"
     assert config.active_set(cfg, date(2026, 12, 1))["name"] == "dec"
     assert config.active_set(cfg, date(2027, 1, 1)) is None
@@ -178,7 +182,7 @@ def test_animated_mov_banner_with_transparency(cfg, media, tmp_path):
     bw, bh = video.banner_size(cfg)
     x0, y0 = video.banner_x(cfg, bw), cfg["banners"]["top_y"]
     assert f.getpixel((x0 + bw - 5, y0 + 5)) != (0, 0, 0)          # transparent corner shows the background
-    cfg["banners"]["top"] = moving_banner(tmp_path / "b2.mov", 3, "qtrle")  # other loop length -> mismatch
+    cfg["banners"]["top"] = moving_banner(tmp_path / "b2.mov", 2.5, "qtrle")  # other loop length -> mismatch
     assert any("banner mismatch" in e for e in video.validate(out, cfg, meta["duration"], (12, 15)))
 
 
@@ -189,8 +193,10 @@ def test_source_shorter_than_banner_loop_is_rejected(cfg, media, tmp_path):
 
 
 def test_mp4_banner_on_green_is_keyed(cfg, media, tmp_path):
+    from clips import config
     cfg["banners"]["top"] = moving_banner(tmp_path / "g.mp4", 4, "libx264")
-    cfg["banners"]["chroma_key"] = "0x00FF00"
+    cfg["banners"]["files"][cfg["banners"]["top"]] = config.banner_file(
+        {"file": cfg["banners"]["top"], "chroma": "#13FF08"})
     out = tmp_path / "k.mp4"
     video.build(media["src8"], cfg["accounts"][0], cfg, out)
     bw, _ = video.banner_size(cfg)
@@ -200,7 +206,35 @@ def test_mp4_banner_on_green_is_keyed(cfg, media, tmp_path):
 
 def test_banner_outside_safe_zone(cfg, tmp_path):
     from PIL import Image
-    Image.new("RGBA", (1000, 360)).save(tmp_path / "w.png")
+    Image.new("RGBA", (1000, 360), (255, 0, 0, 255)).save(tmp_path / "w.png")
     cfg["banners"]["top"] = str(tmp_path / "w.png")
     with pytest.raises(ValueError, match="safe zone"):
         video.check_banner_place(cfg)
+
+
+def test_import_and_build_full_width_playerok_set(cfg, media, tmp_path, monkeypatch):
+    """Playerok's real format: ProRes 4444 canvases, the top one scaled to the frame width, 3 midrolls in turn."""
+    from clips import banners, config
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    top = moving_banner(tmp_path / "gta1.mov", 4, "prores_ks", size="1000x960", box=400)
+    mids = []
+    for i, freq in enumerate((500, 700, 900), 1):
+        v = moving_banner(tmp_path / f"v{i}.mov", 3, "prores_ks", size="540x960", box=300)
+        ff("-i", v, "-f", "lavfi", "-i", f"sine=frequency={freq}:duration=3", "-shortest", "-c:v", "copy",
+           "-c:a", "pcm_s16le", tmp_path / f"midroll{i}.mov")
+        mids.append(str(tmp_path / f"midroll{i}.mov"))
+    block = banners.import_set(cfg, "GTA VI", top, mids, "2026-11-01", "2026-11-30")
+    assert not any(Path(f).exists() for f in [top, *mids])                 # sources are not kept
+    assert "start = 2026-11-01" in block and "midroll3.webm" in block
+    st = config.banner_file(str(tmp_path / "assets/banners/gta-vi/top.webm"))
+    assert video.probe(st["file"])["video"]["width"] == 1080
+    cfg["banners"].update(top_fit="width", top_y=300, midroll_box={"x": 0, "y": 0, "w": 1080})
+    config.use_banner_set(cfg, {"name": "GTA VI", "top": st, "midrolls": [
+        config.banner_file(str(tmp_path / f"assets/banners/gta-vi/midroll{i}.webm")) for i in (1, 2, 3)]})
+    out = tmp_path / "pub_5.mp4"
+    meta = video.build(media["src25"], cfg["accounts"][0], cfg, out, midroll_index=4)   # 4 % 3 -> midroll2
+    assert meta["midroll_file"] == "midroll2.webm" and video.banner_size(cfg) == (1080, 1036)
+    assert all(Path(p).exists() for p in meta["previews"]) and len(meta["previews"]) == 2
+    assert mean_volume(out, meta["midroll_at"] + 0.2, 2.5, 700) - mean_volume(out, 2, 8, 700) >= 15
+    x0, y0, x1, y1 = video.banner_bbox(cfg)
+    assert y0 >= 300 and y1 - y0 >= 320                                      # visible part measured from alpha

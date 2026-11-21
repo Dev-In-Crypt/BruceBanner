@@ -186,7 +186,7 @@ def build_planned(cfg, con):
                 path = str(trends.download_one(cfg, src))
                 with con:
                     con.execute("UPDATE sources SET file_path = ? WHERE id = ?", (path, src["id"]))
-            meta = video.build(path, account, cfg, out, text=text)
+            meta = video.build(path, account, cfg, out, text=text, midroll_index=pub["id"])
         except Exception as e:  # noqa: BLE001
             log.exception("build failed pub=%s source=%s", pub["id"], src["shortcode"])
             with con:
@@ -198,7 +198,7 @@ def build_planned(cfg, con):
             continue
         with con:
             con.execute("UPDATE publications SET state = 'built', file_path = ?, background = ?, banner_type = ?,"
-                        " banner_file = ?, template = ? WHERE id = ?",
-                        (str(out), meta["background"], meta["banner_type"], meta["banner_file"], meta["template"],
-                         pub["id"]))
+                        " banner_file = ?, midroll_file = ?, template = ? WHERE id = ?",
+                        (str(out), meta["background"], meta["banner_type"], meta["banner_file"],
+                         meta.get("midroll_file"), meta["template"], pub["id"]))
         log.info("built pub=%s %s (%s)", pub["id"], out.name, meta["banner_type"])

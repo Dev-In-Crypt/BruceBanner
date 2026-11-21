@@ -11,7 +11,6 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 log = logging.getLogger(__name__)
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
-CHROMA = "0.15:0.05"  # chromakey similarity:blend for .mp4 banners on a plain color (addendum 3)
 
 
 class NoBannerSet(ValueError):
@@ -96,14 +95,23 @@ def is_image(path) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXT
 
 
+def dec(path) -> list[str]:
+    """Decoder option: VP9 WebM keeps its transparency only with libvpx (ffmpeg's own decoder drops it)."""
+    return ["-c:v", "libvpx-vp9"] if Path(path).suffix.lower() == ".webm" else []
+
+
 def banner_size(cfg) -> tuple[int, int]:
-    """Banner size after scaling to top_height_px (aspect kept, width even). Raises if too wide."""
+    """Banner size in the reel (width even). top_fit "height": scaled to top_height_px, raises if too wide;
+    "width": scaled to the frame width (Playerok's full-width canvases, addendum 3)."""
     b = cfg["banners"]
     if is_image(b["top"]):
         w, h = Image.open(b["top"]).size
     else:
         v = probe(b["top"])["video"]
         w, h = v["width"], v["height"]
+    if b.get("top_fit", "height") == "width":
+        W = cfg["compose"]["width"]
+        return W, round(h * W / w / 2) * 2
     bh = b["top_height_px"]
     bw = round(w * bh / h / 2) * 2
     if bw > cfg["compose"]["width"]:
@@ -117,9 +125,12 @@ def banner_x(cfg, bw) -> int:
 
 
 def keyed(cfg, path) -> str:
-    """Filter prefix that turns the plain background of an .mp4 banner transparent ('' for .mov / .png)."""
-    ck = cfg["banners"].get("chroma_key")
-    return f"chromakey={ck}:{CHROMA}," if ck and Path(path).suffix.lower() == ".mp4" else ""
+    """Filter prefix that turns the plain background of a banner without transparency into transparency
+    (the file's chroma color and tolerance from the banner set; '' for .mov / .webm / .png with alpha)."""
+    f = cfg["banners"].get("files", {}).get(str(path))
+    if not f or not f["chroma"]:
+        return ""
+    return f"chromakey=0x{f['chroma'][-6:]}:{f['similarity']}:{f['blend']},"
 
 
 def banner_duration(cfg) -> float:
@@ -137,7 +148,7 @@ def banner_frame(cfg, t=0.0) -> Image.Image:
         v = probe(top)["video"]
         n, d = map(int, v["r_frame_rate"].split("/"))
         t = min(t, max(0.0, banner_duration(cfg) - 1.5 * d / n))  # seeking past the last frame returns nothing
-        p = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(top), "-frames:v", "1",
+        p = subprocess.run(["ffmpeg", "-v", "error", *dec(top), "-ss", f"{t:.3f}", "-i", str(top), "-frames:v", "1",
                             "-vf", f"{keyed(cfg, top)}format=rgba", "-f", "image2pipe", "-vcodec", "png", "-"],
                            capture_output=True)
         if p.returncode != 0 or not p.stdout:
@@ -146,16 +157,30 @@ def banner_frame(cfg, t=0.0) -> Image.Image:
     return img.resize(banner_size(cfg), Image.LANCZOS)
 
 
+def banner_bbox(cfg) -> tuple[int, int, int, int]:
+    """Visible (mostly opaque) part of the banner in reel pixels, over its whole loop."""
+    loop, bw = banner_duration(cfg), banner_size(cfg)[0]
+    boxes = [banner_frame(cfg, loop * k / 4).getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox()
+             for k in (range(4) if loop else [0])]
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        raise ValueError("the banner is fully transparent: wrong file or wrong chroma color")
+    x, y = banner_x(cfg, bw), cfg["banners"]["top_y"]
+    return (x + min(b[0] for b in boxes), y + min(b[1] for b in boxes),
+            x + max(b[2] for b in boxes), y + max(b[3] for b in boxes))
+
+
 def check_banner_place(cfg) -> None:
-    """Addendum 3: the banner must not sit under Instagram's UI. Raises ValueError."""
-    z, W = cfg["compose"].get("safe_zone"), cfg["compose"]["width"]
-    if not z:
-        return
-    bw, _ = banner_size(cfg)
-    x = banner_x(cfg, bw)
-    if x < z["left"] or x + bw > W - z["right"]:
-        raise ValueError(f"banner {bw}px wide at x={x} leaves the safe zone (left {z['left']}, right {z['right']}); "
-                         f"lower banners.top_height_px")
+    """The visible banner must be at least top_min_height_px tall (1/6 of the frame) and stay clear of
+    Instagram's UI (addendum 3). Raises ValueError."""
+    c, b = cfg["compose"], cfg["banners"]
+    x0, y0, x1, y1 = banner_bbox(cfg)
+    if y1 - y0 < b["top_min_height_px"]:
+        raise ValueError(f"visible banner is {y1 - y0}px tall, needs >= {b['top_min_height_px']} (1/6 of the frame)")
+    z = c.get("safe_zone")
+    if z and (y0 < z["top"] or y1 > c["height"] - z["bottom"] or x0 < z["left"] or x1 > c["width"] - z["right"]):
+        raise ValueError(f"visible banner {x0},{y0}-{x1},{y1} leaves the safe zone (top {z['top']}, "
+                         f"bottom {z['bottom']}, left {z['left']}, right {z['right']}); move or resize it")
 
 
 def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None, template="circle"):
@@ -167,7 +192,8 @@ def compose_base(src, frame_png, cfg, out, crf, preset, text=None, workdir=None,
     dur = info["duration"]
     bw, bh = banner_size(cfg)
     args = ["ffmpeg", "-v", "error", "-y", "-i", src, "-loop", "1", "-framerate", fps, "-i", frame_png]
-    args += (["-loop", "1", "-framerate", fps] if is_image(b["top"]) else ["-stream_loop", "-1"]) + ["-i", b["top"]]
+    args += (["-loop", "1", "-framerate", fps] if is_image(b["top"]) else ["-stream_loop", "-1", *dec(b["top"])])
+    args += ["-i", b["top"]]
     audio = "[0:a]"
     if info["audio"] is None:
         args += ["-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo"]
@@ -213,16 +239,15 @@ def midroll_at(duration: float, b: dict) -> float | None:
     return float(min(max(b["midroll_long_insert_sec"], lo), hi, int(duration - 3)))
 
 
-def insert_midroll(base, t, cfg, out) -> float:
+def insert_midroll(base, t, cfg, out, midroll) -> float:
     """Freeze the frame at t, play the whole voiced banner with its own sound, then continue. Returns M."""
     b, c = cfg["banners"], cfg["compose"]
     fps, box = c["fps"], b["midroll_box"]
-    m = stream_duration(b["midroll"])
-    pre_in = ["-c:v", "libvpx-vp9"] if b["midroll_has_alpha"] else []
+    m = stream_duration(midroll)
     graph = (
         "[0:v]split=2[v0][v1];[0:a]asplit=2[a0][a1];"
         f"[v0]trim=end={t},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={m}[pre];"
-        f"[1:v]{keyed(cfg, b['midroll'])}fps={fps},scale={box['w']}:-2,setpts=PTS-STARTPTS+{t}/TB[mid];"
+        f"[1:v]{keyed(cfg, midroll)}fps={fps},scale={box['w']}:-2,setpts=PTS-STARTPTS+{t}/TB[mid];"
         f"[pre][mid]overlay={box['x']}:{box['y']}:eof_action=pass[va];"
         f"[v1]trim=start={t},setpts=PTS-STARTPTS[vb];"
         "[va][vb]concat=n=2:v=1:a=0,format=yuv420p[v];"
@@ -231,7 +256,7 @@ def insert_midroll(base, t, cfg, out) -> float:
         "asetpts=PTS-STARTPTS[am];"
         f"[a1]atrim=start={t},asetpts=PTS-STARTPTS[aq];"
         "[ap][am][aq]concat=n=3:v=0:a=1[a]")
-    run(["ffmpeg", "-v", "error", "-y", "-i", base, *pre_in, "-i", b["midroll"], "-filter_complex", graph,
+    run(["ffmpeg", "-v", "error", "-y", "-i", base, *dec(midroll), "-i", midroll, "-filter_complex", graph,
          "-map", "[v]", "-map", "[a]", *_encode_args(cfg, c["crf"], c["preset"]), out])
     return m
 
@@ -271,8 +296,9 @@ def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
     band = (x0, b["top_y"], x0 + bw, b["top_y"] + bh)
     loop = banner_duration(cfg)
     times = [0.5, p["duration"] / 2, p["duration"] - 0.5]
-    if midroll_window:
-        times.append(sum(midroll_window) / 2)
+    if midroll_window:  # during the midroll the Playerok midroll creative may cover the banner
+        times = [t if not midroll_window[0] - 0.2 <= t <= midroll_window[1] + 0.2 else midroll_window[1] + 0.5
+                 for t in times]
     for t in times:
         base = t  # time in the reel before the midroll was inserted (the frame, banner included, freezes)
         if midroll_window and t >= midroll_window[0]:
@@ -290,7 +316,18 @@ def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
 
 # ---------- build ----------
 
-def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
+def save_previews(cfg, reel, name, midroll_window) -> list[str]:
+    """Frames for a visual check of the banner edges (chroma key artifacts), kept with the debug files."""
+    d = cfg["data"] / "screenshots"
+    out = [d / f"preview_{name}_banner.png"]
+    grab_frame(reel, 1.0).save(out[0])
+    if midroll_window:
+        out.append(d / f"preview_{name}_midroll.png")
+        grab_frame(reel, sum(midroll_window) / 2).save(out[1])
+    return [str(p) for p in out]
+
+
+def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_index=0) -> dict:
     """Build one reel for one account, validate it, return metadata. Raises ValueError if invalid."""
     c, b = cfg["compose"], cfg["banners"]
     if not b["top"]:
@@ -301,7 +338,9 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
         raise ValueError(f"no video stream in {src}")
     if info["duration"] < banner_duration(cfg):  # addendum 3: the banner plays in full at least once
         raise ValueError(f"source {info['duration']:.1f}s is shorter than the banner loop {banner_duration(cfg):.1f}s")
-    t = midroll_at(info["duration"], b) if use_midroll else None
+    mids = b.get("midrolls") or ([b["midroll"]] if b.get("midroll") else [])
+    midroll = mids[midroll_index % len(mids)] if mids and use_midroll else None  # variants 1-3 take turns
+    t = midroll_at(info["duration"], b) if midroll else None
     out = Path(out)
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
@@ -314,16 +353,18 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True) -> dict:
         else:
             base = Path(tmp) / "base.mp4"  # high-quality intermediate, re-encoded once more below
             dur = compose_base(src, frame, cfg, base, 12, "veryfast", text, tmp, template)
-            m = insert_midroll(base, t, cfg, part)
+            m = insert_midroll(base, t, cfg, part, midroll)
     final = dur + m
     problems = validate(part, cfg, final, (t, t + m) if t is not None else None)
     if problems:  # a previous good file at `out` stays untouched
         part.unlink(missing_ok=True)
         raise ValueError("; ".join(problems))
     os.replace(part, out)
+    previews = save_previews(cfg, out, out.stem, (t, t + m) if t is not None else None)
     return {"duration": round(final, 3), "midroll_at": t, "midroll_dur": round(m, 3),
-            "banner_type": "voiced" if t is not None else "static",
-            "banner_file": Path(b["top"]).name, "template": template,
+            "banner_type": "voiced" if t is not None else "static", "previews": previews,
+            "banner_file": Path(b["top"]).name, "midroll_file": Path(midroll).name if t is not None else None,
+            "template": template,
             "background": "black" if template == "square" else Path(account["background"]).name}
 
 

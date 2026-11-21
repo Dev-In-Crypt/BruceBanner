@@ -45,8 +45,11 @@ def cfg(tmp_path, media):
         (tmp_path / sub).mkdir(exist_ok=True)
     c["banners"]["top"] = str(media["banner"])
     c["banners"]["midroll"] = str(media["midroll"])
-    c["banners"]["sets"] = [{"name": "test", "top": c["banners"]["top"], "midroll": c["banners"]["midroll"],
-                             "chroma_key": ""}]
+    # most layout tests were written for a small sticker under Instagram's header
+    c["banners"].update(top_fit="height", top_y=280, midroll_box={"x": 0, "y": 660, "w": 1080})
+    c["banners"]["sets"] = [{"name": "test", "platform": "instagram", "top": config.banner_file(str(media["banner"])),
+                             "midrolls": [config.banner_file(str(media["midroll"]))]}]
+    config.use_banner_set(c, c["banners"]["sets"][0])
     c["accounts"][0]["template"] = "circle"  # most layout tests were written for the circle
     c["accounts"][0]["background"] = str(media["bg"])
     c["compose"]["preset"] = "veryfast"  # speed only; output format is the same

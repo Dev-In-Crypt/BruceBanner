@@ -46,8 +46,12 @@ def load(path=None, check_files=True) -> dict:
     # addendum 3: dated banner sets; an old config with plain top/midroll is one set without dates
     b["sets"] = b.get("sets") or [{"name": "default", "top": b.get("top", ""), "midroll": b.get("midroll", "")}]
     for st in b["sets"]:
-        st["top"], st["midroll"] = _abs(st["top"]), _abs(st.get("midroll", ""))
-        st.setdefault("chroma_key", "")
+        st.setdefault("platform", "instagram")
+        mids = st.get("midrolls") or ([st["midroll"]] if st.get("midroll") else [])
+        st["top"], st["midrolls"] = banner_file(st["top"]), [banner_file(m) for m in mids]
+        for f in [st["top"], *st["midrolls"]]:  # old set-level chroma_key: for .mp4 files of the set
+            if st.get("chroma_key") and not f["chroma"] and f["file"].lower().endswith(".mp4"):
+                f["chroma"] = st["chroma_key"]
     use_banner_set(cfg, active_set(cfg))
     for a in cfg["accounts"]:
         a.setdefault("template", "square")  # addendum 3: a decorative background is a moderation risk
@@ -63,6 +67,16 @@ def load(path=None, check_files=True) -> dict:
     return cfg
 
 
+def banner_file(spec) -> dict:
+    """A banner file entry: a path, or a table {file, chroma, similarity, blend, duration}."""
+    d = {"file": spec} if isinstance(spec, str) else dict(spec)
+    d["file"] = _abs(d.get("file", ""))
+    d.setdefault("chroma", "")         # background color of an .mp4 without transparency, "" for .mov/.webm/.png
+    d.setdefault("similarity", 0.15)   # ffmpeg chromakey tolerance
+    d.setdefault("blend", 0.05)
+    return d
+
+
 def today(cfg) -> date:
     return datetime.now(ZoneInfo(cfg.get("timezone", "Europe/Moscow"))).date()
 
@@ -70,14 +84,16 @@ def today(cfg) -> date:
 def active_set(cfg, day: date | None = None) -> dict | None:
     """The banner set valid on `day` (first match), or None: then building stops (addendum 3)."""
     day = day or today(cfg)
-    return next((st for st in cfg["banners"]["sets"]
-                 if st.get("start", date.min) <= day <= st.get("end", date.max)), None)
+    return next((st for st in cfg["banners"]["sets"] if st["platform"] == "instagram"
+                 and st.get("start", date.min) <= day <= st.get("end", date.max)), None)
 
 
 def use_banner_set(cfg, st: dict | None) -> None:
     """Copy the set's files into banners.top / banners.midroll, which the build reads. None -> top = ''."""
-    st = st or {"name": "", "top": "", "midroll": "", "chroma_key": ""}
-    cfg["banners"].update(top=st["top"], midroll=st["midroll"], chroma_key=st["chroma_key"], set_name=st["name"])
+    st = st or {"name": "", "top": banner_file(""), "midrolls": []}
+    mids = [m["file"] for m in st["midrolls"]]
+    cfg["banners"].update(top=st["top"]["file"], midrolls=mids, midroll=mids[0] if mids else "", set_name=st["name"],
+                          files={f["file"]: f for f in [st["top"], *st["midrolls"]]})
 
 
 def validate(cfg: dict, check_files=True) -> None:
@@ -107,27 +123,30 @@ def validate(cfg: dict, check_files=True) -> None:
         if check_files and a["cover"] and not Path(a["cover"]).is_file():
             errors.append(f"account {a['nick']}: cover not found: {a['cover']}")
     for st in b["sets"]:
-        if check_files and not Path(st["top"]).is_file():
-            errors.append(f"banner set {st['name']!r}: top not found: {st['top']}")
-        if check_files and st["midroll"] and not Path(st["midroll"]).is_file():
-            errors.append(f"banner set {st['name']!r}: midroll not found: {st['midroll']}")
         if st.get("start", date.min) > st.get("end", date.max):
             errors.append(f"banner set {st['name']!r}: start is after end")
-        if st["chroma_key"] and not re.fullmatch(r"0x[0-9A-Fa-f]{6}", st["chroma_key"]):
-            errors.append(f"banner set {st['name']!r}: chroma_key must look like 0x00FF00")
-    z = c.get("safe_zone")
-    if z:  # the banner must stay clear of Instagram's own UI (addendum 3); width is checked at build
-        if b["top_y"] < z["top"]:
-            errors.append(f"banners.top_y must be >= compose.safe_zone.top ({z['top']}): the Reels header covers it")
-        if b["top_y"] + b["top_height_px"] > c["height"] - z["bottom"]:
-            errors.append("the top banner reaches into compose.safe_zone.bottom (caption, buttons)")
+        for f in [st["top"], *st["midrolls"]]:
+            name = f"banner set {st['name']!r}: {Path(f['file']).name}"
+            if f["chroma"] and not re.fullmatch(r"(#|0x)[0-9A-Fa-f]{6}", f["chroma"]):
+                errors.append(f"{name}: chroma must look like #13FF08")
+            if not check_files:
+                continue
+            if not Path(f["file"]).is_file():
+                errors.append(f"{name}: file not found: {f['file']}")
+            elif f.get("duration"):  # catches a wrong or broken file
+                from clips.video import stream_duration
+                real = stream_duration(f["file"])
+                if abs(real - f["duration"]) > 0.15:
+                    errors.append(f"{name}: duration {real:.2f}s, config says {f['duration']}s")
     if b["top_min_height_px"] < math.ceil(c["height"] / 6):
         errors.append(f"banners.top_min_height_px must be >= {math.ceil(c['height'] / 6)} (1/6 of the frame)")
-    if b["top_height_px"] < b["top_min_height_px"]:
+    if b.get("top_fit", "height") not in ("height", "width"):
+        errors.append("banners.top_fit must be height or width")
+    if b.get("top_fit", "height") == "height" and b["top_height_px"] < b["top_min_height_px"]:
         errors.append("banners.top_height_px must be >= banners.top_min_height_px")
-    banner_bottom = b["top_y"] + b["top_height_px"]  # H8: nothing may cover the banner
-    if b["midroll_box"]["y"] < banner_bottom:
-        errors.append(f"banners.midroll_box.y must be >= {banner_bottom} (below the top banner)")
+    # H8: nothing of ours may cover the banner. The midroll (a Playerok creative itself) may, for its 3 s.
+    # With top_fit = "width" the visible banner is measured from its transparency at build time.
+    banner_bottom = b["top_y"] + (b["top_height_px"] if b.get("top_fit", "height") == "height" else 0)
     if c["circle_center_y"] - c["circle_diameter"] / 2 < banner_bottom:
         errors.append(f"circle top must be >= {banner_bottom} (below the top banner)")
     if c["text_overlay"] and c["text_y"] < banner_bottom:

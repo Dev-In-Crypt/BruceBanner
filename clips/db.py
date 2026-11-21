@@ -145,6 +145,7 @@ MIGRATIONS = [
     ("publications", "last_likes", "INTEGER"),
     ("publications", "last_comments", "INTEGER"),
     ("publications", "comments_checked_at", "TEXT"),
+    ("publications", "midroll_file", "TEXT"),                       # which midroll variant (they take turns)
 ]
 
 

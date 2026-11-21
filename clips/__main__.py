@@ -28,6 +28,15 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--account", required=True)
     b.add_argument("--out", required=True)
     b.add_argument("--no-midroll", action="store_true")
+    b.add_argument("--midroll-index", type=int, default=0, help="which midroll variant (they take turns)")
+    ib = sub.add_parser("import-banners", parents=[common],
+                        help="re-encode a Playerok .mov banner set to light WebM, delete the sources")
+    ib.add_argument("--name", required=True)
+    ib.add_argument("--top", required=True)
+    ib.add_argument("--midroll", nargs="*", default=[])
+    ib.add_argument("--start", help="first day, YYYY-MM-DD")
+    ib.add_argument("--end", help="last day, YYYY-MM-DD")
+    ib.add_argument("--keep-source", action="store_true")
     b.add_argument("--text", help="text plate (needs compose.text_overlay = true)")
     v = sub.add_parser("validate", parents=[common], help="validate a built reel")
     v.add_argument("path")
@@ -78,7 +87,7 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_command(args, cfg, con) -> int:
-    from clips import captions, comments, instagram, maintenance, notion, planner, reports, submit, telegram, trends, video
+    from clips import banners, captions, comments, instagram, maintenance, notion, planner, reports, submit, telegram, trends, video
     dry = args.dry_run
     if args.command in ("sync-accounts", "account-status", "account-bound", "health", "publish-file") and not dry:
         db.sync_accounts(con, cfg)
@@ -88,8 +97,13 @@ def run_command(args, cfg, con) -> int:
         if args.text and not cfg["compose"]["text_overlay"]:
             raise SystemExit("--text needs compose.text_overlay = true")
         meta = video.build(args.source, account_cfg(cfg, args.account), cfg, args.out,
-                           text=args.text, use_midroll=not args.no_midroll)
+                           text=args.text, use_midroll=not args.no_midroll, midroll_index=args.midroll_index)
         print(json.dumps(meta, ensure_ascii=False, indent=2))
+    elif args.command == "import-banners":
+        if dry:
+            raise SystemExit("import-banners has no dry-run: it only writes new files under assets/banners")
+        print(banners.import_set(cfg, args.name, args.top, args.midroll, args.start, args.end, args.keep_source))
+        print("# paste this block into config.toml under [banners]")
     elif args.command == "validate":
         problems = video.validate(args.path, cfg, video.probe(args.path)["duration"])
         print("OK" if not problems else "\n".join(problems))

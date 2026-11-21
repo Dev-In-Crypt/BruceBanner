@@ -17,27 +17,43 @@ risk_min_engagement_pct = 1.0           # (likes + comments) / views * 100 below
 limit_alert_used_pct = 50               # author limit (one for the network): alert above this share used
 
 [banners]
-top_y = 280                             # px from top edge; below Instagram's own header (section 1.1)
-top_height_px = 360                     # banner is scaled to this height, width keeps aspect, centered
-top_min_height_px = 320                 # >= 1920/6, never lower
-midroll_has_alpha = false               # true if midroll is a VP9 WebM with transparency
-midroll_box = { x = 0, y = 660, w = 1080 }   # where the animation is drawn on the frozen frame; height keeps aspect
+# Playerok creatives (Nov 2026) are full-frame canvases: the top banner 2000x1920 with transparency,
+# scaled to the frame width; the midrolls 1080x1920 with sound, drawn over the frozen frame.
+top_fit = "width"                       # "width": scale to the frame width (Playerok canvases); "height": to top_height_px
+top_y = 0                               # px from the top edge where the canvas starts (check the preview frames)
+top_height_px = 360                     # only for top_fit = "height" (small stickers)
+top_min_height_px = 320                 # the visible banner (measured from its transparency) is >= 1920/6
+midroll_box = { x = 0, y = 0, w = 1080 }     # where the midroll is drawn on the frozen frame; height keeps aspect
 midroll_min_source_sec = 12
 midroll_short_until_sec = 20
 midroll_short_insert_sec = 10           # clamped to <= duration - 3 (10 also satisfies the 10-20 s rule)
 midroll_long_window_sec = [10, 20]
 midroll_long_insert_sec = 12
 # Playerok banner sets with dates (addendum 3). The set valid today (Moscow time) is used. After the last
-# one ends, building stops and Telegram gets an alert on every plan run until a new set is added here.
-# Files: .mov with transparency (preferred) or a transparent .png; an .mp4 on a plain color needs chroma_key.
+# one ends, building stops and Telegram gets an alert once a day until a new set is added here.
+# Load a new set once with:  python -m clips import-banners --name "..." --top gta1.mov --midroll m1.mov m2.mov m3.mov
+# It re-encodes the ProRes 4444 .mov files to light WebM with transparency, deletes the sources and prints the block.
+# Fallback without .mov: the .mp4 files with their background color: { file = "...mp4", chroma = "#13FF08",
+# similarity = 0.15, blend = 0.05, duration = 12.25 }.
 # Only Playerok banners: never another advertiser's banner or any other ad on these accounts.
 [[banners.sets]]
 name = "GTA VI"                         # 01.11-30.11.2026 the GTA VI version is mandatory
+platform = "instagram"
 start = 2026-11-01
 end = 2026-11-30
-top = "assets/banners/top.png"          # looped over the whole reel; reels shorter than one loop are rejected
-midroll = "assets/banners/voiced.mp4"   # voiced banner animation; must have an audio stream; "" disables
-chroma_key = ""                         # e.g. "0x00FF00" for an .mp4 on green; "" = the file has transparency
+top = { file = "assets/banners/gta-vi/top.webm", duration = 12.25 }      # gta1.mov; looped, reels shorter are rejected
+midrolls = [                            # midroll1-3.mov, used in turn
+  { file = "assets/banners/gta-vi/midroll1.webm", duration = 3.18 },
+  { file = "assets/banners/gta-vi/midroll2.webm", duration = 3.18 },
+  { file = "assets/banners/gta-vi/midroll3.webm", duration = 3.18 },
+]
+# instagram1.mov has no dates from Playerok. As an undated set it would be used whenever no dated set is valid,
+# so building would never stop. Add it only when Playerok says when it applies:
+# [[banners.sets]]
+# name = "Instagram"
+# platform = "instagram"
+# top = { file = "assets/banners/instagram/top.webm", duration = 12.25 }
+# midrolls = [...]
 
 [compose]
 width = 1080
