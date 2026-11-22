@@ -174,7 +174,7 @@ def main(argv=None) -> int:
     args = parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    cfg = config.load(args.config)
+    cfg = config.load(args.config, check_files=args.command != "import-banners")  # it creates the banner files
     con = db.connect(cfg["data"] / "clips.db", readonly=args.dry_run)
     try:
         return run_command(args, cfg, con)

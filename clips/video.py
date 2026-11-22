@@ -26,7 +26,11 @@ def run(cmd: list[str]) -> str:
 
 
 def probe(path) -> dict:
-    j = json.loads(run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", path]))
+    cmd = ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)]
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if p.returncode != 0:
+        raise RuntimeError(f"ffprobe failed ({p.returncode}): {path}\n{p.stderr[-2000:]}")
+    j = json.loads(p.stdout)  # stdout only: Playerok's .mov print "Referenced QT chapter track not found" to stderr
     first = lambda kind: next((s for s in j["streams"] if s["codec_type"] == kind), None)  # noqa: E731
     return {"duration": float(j["format"]["duration"]), "size": int(j["format"]["size"]),
             "video": first("video"), "audio": first("audio")}
@@ -93,6 +97,18 @@ def make_frame_png(background, cfg, out_path, template="circle"):
 
 def is_image(path) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXT
+
+
+def pick_background(path, n: int, every: int) -> str:
+    """A background file, or a folder of images used in series: `every` reels per image (sorted by name),
+    then the next one, round and round. n = how many reels of this account came before."""
+    p = Path(path)
+    if not p.is_dir():
+        return str(p)
+    files = sorted(f for f in p.iterdir() if is_image(f))
+    if not files:
+        raise ValueError(f"no images in background folder {p}")
+    return str(files[n // every % len(files)])
 
 
 def dec(path) -> list[str]:
@@ -327,9 +343,13 @@ def save_previews(cfg, reel, name, midroll_window) -> list[str]:
     return [str(p) for p in out]
 
 
-def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_index=0) -> dict:
-    """Build one reel for one account, validate it, return metadata. Raises ValueError if invalid."""
+def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_index=0, n_before=0) -> dict:
+    """Build one reel for one account, validate it, return metadata. Raises ValueError if invalid.
+    Circle template: also writes the cover (the background alone, 1080x1920) next to the reel as .jpg."""
     c, b = cfg["compose"], cfg["banners"]
+    template = account.get("template", "square")
+    background = pick_background(account["background"], n_before, c.get("background_every", 20)) \
+        if template == "circle" else None
     if not b["top"]:
         raise NoBannerSet("no Playerok banner set is valid today: add a new set to banners.sets")
     check_banner_place(cfg)
@@ -345,8 +365,7 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_ind
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
         frame = Path(tmp) / "frame.png"
-        template = account.get("template", "square")
-        make_frame_png(account.get("background"), cfg, frame, template)
+        make_frame_png(background, cfg, frame, template)
         m = 0.0
         if t is None:
             dur = compose_base(src, frame, cfg, part, c["crf"], c["preset"], text, tmp, template)
@@ -360,12 +379,15 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_ind
         part.unlink(missing_ok=True)
         raise ValueError("; ".join(problems))
     os.replace(part, out)
+    if background:  # the grid shows the background alone, as on the reference accounts
+        ImageOps.fit(Image.open(background).convert("RGB"), (c["width"], c["height"])).save(
+            out.with_suffix(".jpg"), quality=92)
     previews = save_previews(cfg, out, out.stem, (t, t + m) if t is not None else None)
     return {"duration": round(final, 3), "midroll_at": t, "midroll_dur": round(m, 3),
             "banner_type": "voiced" if t is not None else "static", "previews": previews,
             "banner_file": Path(b["top"]).name, "midroll_file": Path(midroll).name if t is not None else None,
             "template": template,
-            "background": "black" if template == "square" else Path(account["background"]).name}
+            "background": Path(background).name if background else "black"}
 
 
 # ---------- perceptual hash for dedup (module 5) ----------

@@ -34,7 +34,7 @@ def world(cfg, con, monkeypatch, tmp_path):
     cfg["accounts"] = [{**base, "nick": "acc1"}, {**base, "nick": "acc2"}]
     db.sync_accounts(con, cfg)
 
-    def fake_build(src, account, c, out, text=None, use_midroll=True, midroll_index=0):
+    def fake_build(src, account, c, out, text=None, use_midroll=True, midroll_index=0, n_before=0):
         out.write_bytes(b"x")
         return {"duration": 8.0, "midroll_at": None, "midroll_dur": 0, "banner_type": "static",
                 "banner_file": "top.png", "background": "bg.png", "template": account.get("template", "circle")}

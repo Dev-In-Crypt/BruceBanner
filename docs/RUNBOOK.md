@@ -123,11 +123,12 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
 
 ## 6. Сменить баннеры (новая кампания Playerok)
 
-1. Скопировать на сервер версии `.mov` (ProRes 4444 с прозрачностью): верхний баннер и мидроллы 1-3.
+1. Скопировать на сервер версию `.mov` (ProRes 4444 с прозрачностью) стандартного баннера. Мидроллы с озвучкой
+   не используем: работаем только со стандартным баннером, который крутится по кругу всё видео.
 2. Загрузить набор одной командой (пережимает в лёгкий WebM шириной 1080 с прозрачностью, исходники удаляет):
    ```bash
-   python -m clips import-banners --name "GTA VI" --top gta1.mov --midroll midroll1.mov midroll2.mov midroll3.mov \
-     --start 2026-11-01 --end 2026-11-30
+   python -m clips import-banners --name "GTA VI" --top gta1.mov --start 2026-11-01 --end 2026-11-30
+   python -m clips import-banners --name "Instagram" --top instagram1.mov --start 2026-12-01
    ```
    Команда печатает блок `[[banners.sets]]`: вставить его в `config.toml` в раздел `[banners]`.
    Старые наборы можно оставить: каждый день берётся тот, чьи даты включают сегодня.

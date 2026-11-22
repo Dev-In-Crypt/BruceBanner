@@ -31,7 +31,7 @@ midroll_long_window_sec = [10, 20]
 midroll_long_insert_sec = 12
 # Playerok banner sets with dates (addendum 3). The set valid today (Moscow time) is used. After the last
 # one ends, building stops and Telegram gets an alert once a day until a new set is added here.
-# Load a new set once with:  python -m clips import-banners --name "..." --top gta1.mov --midroll m1.mov m2.mov m3.mov
+# Load a new set once with:  python -m clips import-banners --name "..." --top gta1.mov --start ... --end ...
 # It re-encodes the ProRes 4444 .mov files to light WebM with transparency, deletes the sources and prints the block.
 # Fallback without .mov: the .mp4 files with their background color: { file = "...mp4", chroma = "#13FF08",
 # similarity = 0.15, blend = 0.05, duration = 12.25 }.
@@ -42,25 +42,22 @@ platform = "instagram"
 start = 2026-11-01
 end = 2026-11-30
 top = { file = "assets/banners/gta-vi/top.webm", duration = 12.25 }      # gta1.mov; looped, reels shorter are rejected
-midrolls = [                            # midroll1-3.mov, used in turn
-  { file = "assets/banners/gta-vi/midroll1.webm", duration = 3.18 },
-  { file = "assets/banners/gta-vi/midroll2.webm", duration = 3.18 },
-  { file = "assets/banners/gta-vi/midroll3.webm", duration = 3.18 },
-]
-# instagram1.mov has no dates from Playerok. As an undated set it would be used whenever no dated set is valid,
-# so building would never stop. Add it only when Playerok says when it applies:
-# [[banners.sets]]
-# name = "Instagram"
-# platform = "instagram"
-# top = { file = "assets/banners/instagram/top.webm", duration = 12.25 }
-# midrolls = [...]
+midrolls = []                           # owner: static banner only, no voiced midroll (do not add midroll1-3)
+
+[[banners.sets]]
+name = "Instagram"                      # standard banner after the GTA VI month; no end date from Playerok
+platform = "instagram"
+start = 2026-12-01
+top = { file = "assets/banners/instagram/top.webm", duration = 12.25 }   # instagram1.mov
+midrolls = []
 
 [compose]
 width = 1080
 height = 1920
 fps = 30
-circle_diameter = 940
-circle_center_y = 1160
+circle_diameter = 990                   # like the reference accounts (smexouzavr, hihiks.tv): ~92% of the width
+circle_center_y = 1150                  # the banner is drawn over the circle's top edge, never under it
+background_every = 20                   # circle: reels per background image when the account's background is a folder
 circle_border_px = 3                    # thin ring around the circle, 0 disables
 circle_border_color = "#FFFFFF"
 square_size = 1080                      # template "square": video cropped to a centered square, black background
@@ -86,7 +83,7 @@ right = 120                             # like / comment / share buttons
 # Picked 18.11.2026 from 30 meme pages found by Russian meme hashtags (docs/DONORS.md): typical views 3k-229k
 donors = ["hermesqz", "hu1iganyo", "ramzik.krsk24", "top.leym", "daring_555", "axyennyi_tip", "meme.actually"]
 donors_movies = ["callmeayub_17"]       # Russian film/series cuts (donor_group "movies", addendum 2b)
-voiced_priority = true                  # rank sources of 12 s+ higher: they get the voiced banner (700 vs 400)
+voiced_priority = true                  # bonus for 12 s+ sources; has no effect while banner sets have no midrolls
 share_weight = true                     # rank by shares/views too, when Apify returns sharesCount
 blocked_donors = []
 fresh_days = 3                          # Apify onlyPostsNewerThan for regular fetches
@@ -97,7 +94,7 @@ min_views = 100000
 views_to_median_ratio = 2.0
 median_window = 30                      # last N mature reels of the donor
 min_donor_samples = 8
-min_duration_sec = 5
+min_duration_sec = 5                    # sources shorter than the banner loop are rejected separately
 max_duration_sec = 90
 
 [filter]
@@ -213,12 +210,14 @@ bot_name_pattern = '[a-z]+[._]?[a-z]*\d{5,}'   # usernames like anna_k847310
 [[accounts]]
 nick = "example_account"
 adspower_id = "jabc123"                 # AdsPower profile user_id
-background = "assets/backgrounds/example_account.jpg"   # only for template "circle"
+background = "assets/backgrounds/example_account"     # circle: an image, or a folder of 9:16 images used in series
+                                        # (compose.background_every reels each, by file name); no people or AI characters
 daily_limit = 1
 caption_lang = "japanese"               # japanese | russian | none (post captions and bio)
 theme = "anime"                         # caption/bio theme: a key of captions.donors_<caption_lang> (addendum 1b)
-template = "square"                     # square (default, addendum 3) | circle (art background: only as an experiment)
+template = "circle"                     # circle (owner, Nov 2026: test reels) | square (video on black)
 donor_group = "memes"                   # memes | movies: which video donors feed this account (addendum 2b)
-cover = "assets/covers/example_account.jpg"   # 9:16 image uploaded as the reel cover; "" = Instagram's frame
+cover = ""                              # "" = circle: the reel's background alone (built next to the reel);
+                                        # square: Instagram's frame. A path here overrides it for every reel.
 overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)
 bind_code = ""                          # code from the Playerok bot: the next reel goes out with it as its caption

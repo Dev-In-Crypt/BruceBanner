@@ -361,8 +361,9 @@ def publish_one(cfg, con, pub: dict, account: dict, dry=False) -> str:
     try:
         with session(cfg, account) as page:
             try:
+                auto = Path(pub["file_path"]).with_suffix(".jpg")  # the background, written by video.build
                 post_reel(page, cfg, nick, pub["file_path"], pub["caption"] or "", dry, on_share,
-                          account.get("cover") or None)
+                          account.get("cover") or (str(auto) if auto.is_file() else None))
             except HealthProblem as e:
                 shot = save_debug(cfg, page, nick, f"health_{e.args[0]}")
                 apply_health(con, cfg, nick, e.args[0], shot, dry)

@@ -6,3 +6,6 @@ assets/
 __pycache__/
 *.pyc
 .pytest_cache/
+banners/
+*.docx
+Examples (not 4 git)/

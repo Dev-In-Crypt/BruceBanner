@@ -118,7 +118,7 @@ def validate(cfg: dict, check_files=True) -> None:
             errors.append(f"account {a['nick']}: donor_group must be one of {DONOR_GROUPS}")
         elif a["donor_group"] == "movies" and not cfg["trends"].get("donors_movies"):
             errors.append(f"account {a['nick']}: donor_group movies but trends.donors_movies is empty")
-        if check_files and a["template"] == "circle" and not Path(a["background"]).is_file():
+        if check_files and a["template"] == "circle" and not Path(a["background"]).exists():  # file or folder
             errors.append(f"account {a['nick']}: background not found: {a['background']}")
         if check_files and a["cover"] and not Path(a["cover"]).is_file():
             errors.append(f"account {a['nick']}: cover not found: {a['cover']}")

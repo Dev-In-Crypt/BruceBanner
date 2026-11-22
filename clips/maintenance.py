@@ -49,8 +49,8 @@ def run_maintenance(cfg, con, dry, now=None) -> dict:
             if f.is_file() and f.stat().st_mtime < cutoff:
                 n["debug"] += _rm(f, dry, "old debug file")
     # 4. orphans in build/ and tmp/ older than a day
-    referenced = {str(Path(r[0]).resolve()) for r in con.execute(
-        "SELECT file_path FROM publications WHERE file_path IS NOT NULL")}
+    referenced = {str(Path(r[0]).resolve().with_suffix(s)) for r in con.execute(  # .jpg: the reel's cover
+        "SELECT file_path FROM publications WHERE file_path IS NOT NULL") for s in (".mp4", ".jpg")}
     day_ago = time.time() - 86400
     for d in ("build", "tmp"):
         for f in (cfg["data"] / d).iterdir():

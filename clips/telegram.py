@@ -95,7 +95,8 @@ def msg_submit(pub: dict, cfg, warnings=()) -> tuple[str, list]:
         f"(дедлайн {published + timedelta(days=p['deadline_days']):%d.%m})",
     ]
     if pub.get("needs_screen_recording"):
-        lines += ["⚠️ Нужна запись экрана статистики с телефона",
+        lines += ["⚠️ Нужна запись экрана статистики с телефона (в «Аудитории» открыть «Страна» и «Пол»)",
+                  "Проверьте возраст: нужно 70%+ зрителей младше 45, иначе выплату урежут пропорционально",
                   f"Запишите долю просмотров из России: /geo {pub['id']} &lt;процент&gt;"]
     lines += [html.escape(w) for w in warnings]
     buttons = [[("Подано", f"sub:{pub['id']}")], [("Одобрено", f"ok:{pub['id']}"), ("Отклонено", f"rej:{pub['id']}")]]

@@ -186,7 +186,9 @@ def build_planned(cfg, con):
                 path = str(trends.download_one(cfg, src))
                 with con:
                     con.execute("UPDATE sources SET file_path = ? WHERE id = ?", (path, src["id"]))
-            meta = video.build(path, account, cfg, out, text=text, midroll_index=pub["id"])
+            n_before = con.execute("SELECT COUNT(*) FROM publications WHERE account = ? AND id < ?",
+                                   (pub["account"], pub["id"])).fetchone()[0]  # background series position
+            meta = video.build(path, account, cfg, out, text=text, midroll_index=pub["id"], n_before=n_before)
         except Exception as e:  # noqa: BLE001
             log.exception("build failed pub=%s source=%s", pub["id"], src["shortcode"])
             with con:

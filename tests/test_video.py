@@ -38,6 +38,19 @@ def test_make_frame_png(cfg, media, tmp_path):
     assert f.getpixel((10, 10)) == (20, 30, 70, 255)                                          # background
 
 
+def test_pick_background_series(tmp_path):
+    d = tmp_path / "bg"
+    d.mkdir()
+    for name in ("b.jpg", "a.png", "notes.txt"):
+        (d / name).write_bytes(b"x")
+    pick = lambda n: Path(video.pick_background(d, n, 20)).name  # noqa: E731
+    assert [pick(0), pick(19), pick(20), pick(39), pick(40)] == ["a.png", "a.png", "b.jpg", "b.jpg", "a.png"]
+    assert video.pick_background(d / "a.png", 99, 20) == str(d / "a.png")   # a single file: always it
+    (d / "a.png").unlink(), (d / "b.jpg").unlink()
+    with pytest.raises(ValueError, match="no images"):
+        video.pick_background(d, 0, 20)
+
+
 def test_compose_adds_silence_when_source_has_no_audio(cfg, media, tmp_path):
     video.make_frame_png(media["bg"], cfg, tmp_path / "f.png")
     out = tmp_path / "base.mp4"
@@ -97,6 +110,9 @@ def test_build_short_is_static(cfg, media, tmp_path):
     meta = video.build(media["src8"], cfg["accounts"][0], cfg, tmp_path / "s.mp4")
     assert meta["banner_type"] == "static" and meta["midroll_at"] is None
     assert abs(meta["duration"] - 8) < 0.1
+    from PIL import Image
+    cover = Image.open(tmp_path / "s.jpg")                                    # circle: cover = background alone
+    assert cover.size == (1080, 1920) and max(abs(a - b) for a, b in zip(cover.getpixel((540, 1150)), (20, 30, 70))) < 8
 
 
 def test_build_with_text(cfg, media, tmp_path):
@@ -119,7 +135,7 @@ def test_build_square_template(cfg, media, tmp_path):
     out = tmp_path / "sq.mp4"
     acc = {**cfg["accounts"][0], "template": "square", "background": ""}
     meta = video.build(media["src8"], acc, cfg, out)
-    assert meta["template"] == "square" and meta["background"] == "black"
+    assert meta["template"] == "square" and meta["background"] == "black" and not out.with_suffix(".jpg").exists()
     f = video.grab_frame(out, 2)
     size, x, y = video.video_box(cfg, "square")
     assert f.getpixel((10, y + size + 50)) == (0, 0, 0) or max(f.getpixel((10, y + size + 50))) < 20  # black below
