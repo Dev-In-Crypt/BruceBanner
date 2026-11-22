@@ -63,6 +63,21 @@ def test_background_variation(cfg, tmp_path):
     assert ImageChops.difference(v("acc:1"), v("acc:2")).getbbox() is None   # switched off: plain fit
 
 
+def test_background_blur_only_in_reel(cfg, tmp_path):
+    from PIL import Image
+    src = tmp_path / "stripes.png"
+    Image.linear_gradient("L").resize((1080, 1920)).point(lambda p: 255 * (p // 2 % 2)).convert("RGB").save(src)
+    edge = lambda im: im.convert("L").crop((0, 0, 1080, 200)).getextrema()  # noqa: E731  above the circle
+    cfg["compose"]["background_blur"] = 0
+    video.make_frame_png(src, cfg, tmp_path / "sharp.png")
+    cfg["compose"]["background_blur"] = 12
+    video.make_frame_png(src, cfg, tmp_path / "soft.png")
+    assert edge(Image.open(tmp_path / "sharp.png")) == (0, 255)
+    lo, hi = edge(Image.open(tmp_path / "soft.png"))
+    assert lo > 0 and hi < 255                                 # hard stripes smoothed in the reel
+    assert edge(video.background_image(src, cfg)) == (0, 255)  # the cover source is untouched
+
+
 def test_compose_adds_silence_when_source_has_no_audio(cfg, media, tmp_path):
     video.make_frame_png(media["bg"], cfg, tmp_path / "f.png")
     out = tmp_path / "base.mp4"

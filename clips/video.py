@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 log = logging.getLogger(__name__)
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -101,7 +101,8 @@ def make_frame_png(background, cfg, out_path, template="circle", seed=None):
         frame.save(out_path)
         return
     D, cy = c["circle_diameter"], c["circle_center_y"]
-    bg = background_image(background, cfg, seed).convert("RGBA")
+    bg = background_image(background, cfg, seed).filter(ImageFilter.GaussianBlur(c.get("background_blur", 0)))
+    bg = bg.convert("RGBA")  # blur: video only, the cover stays sharp (owner)
     s = 4  # supersampling for smooth edges
     box = [(W - D) // 2 * s, (cy - D // 2) * s, (W + D) // 2 * s, (cy + D // 2) * s]
     mask = Image.new("L", (W * s, H * s), 255)
