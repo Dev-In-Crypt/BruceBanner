@@ -58,6 +58,7 @@ fps = 30
 circle_diameter = 990                   # like the reference accounts (smexouzavr, hihiks.tv): ~92% of the width
 circle_center_y = 1150                  # the banner is drawn over the circle's top edge, never under it
 background_every = 20                   # circle: reels per background image when the account's background is a folder
+background_variation = true             # each reel (and its cover) gets its own version: mirror, zoom, shift, light
 circle_border_px = 3                    # thin ring around the circle, 0 disables
 circle_border_color = "#FFFFFF"
 square_size = 1080                      # template "square": video cropped to a centered square, black background

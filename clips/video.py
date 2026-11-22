@@ -3,11 +3,12 @@ import io
 import json
 import logging
 import os
+import random
 import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageOps, ImageStat
 
 log = logging.getLogger(__name__)
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -67,7 +68,25 @@ def video_box(cfg, template) -> tuple[int, int, int]:
     return d, (c["width"] - d) // 2, c["circle_center_y"] - d // 2
 
 
-def make_frame_png(background, cfg, out_path, template="circle"):
+def background_image(path, cfg, seed=None) -> Image.Image:
+    """The background at frame size. With a seed (compose.background_variation) every reel gets its own
+    slightly different version of the image: mirror, zoom up to 15% with a shifted crop, brightness and
+    saturation within a few percent. Same seed, same picture, so the cover matches the reel."""
+    W, H = cfg["compose"]["width"], cfg["compose"]["height"]
+    img = Image.open(path).convert("RGB")
+    if seed is None or not cfg["compose"].get("background_variation"):
+        return ImageOps.fit(img, (W, H))
+    r = random.Random(seed)
+    if r.random() < 0.5:
+        img = ImageOps.mirror(img)
+    z = r.uniform(1.0, 1.15)
+    img = ImageOps.fit(img, (round(W * z), round(H * z)))
+    x, y = r.randint(0, img.width - W), r.randint(0, img.height - H)
+    img = ImageEnhance.Brightness(img.crop((x, y, x + W, y + H))).enhance(r.uniform(0.93, 1.07))
+    return ImageEnhance.Color(img).enhance(r.uniform(0.9, 1.12))
+
+
+def make_frame_png(background, cfg, out_path, template="circle", seed=None):
     """Frame drawn over the video: a transparent hole where the video shows through.
 
     circle: account background with a round hole and a thin ring (spec module 7).
@@ -82,7 +101,7 @@ def make_frame_png(background, cfg, out_path, template="circle"):
         frame.save(out_path)
         return
     D, cy = c["circle_diameter"], c["circle_center_y"]
-    bg = ImageOps.fit(Image.open(background).convert("RGBA"), (W, H))
+    bg = background_image(background, cfg, seed).convert("RGBA")
     s = 4  # supersampling for smooth edges
     box = [(W - D) // 2 * s, (cy - D // 2) * s, (W + D) // 2 * s, (cy + D // 2) * s]
     mask = Image.new("L", (W * s, H * s), 255)
@@ -350,6 +369,7 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_ind
     template = account.get("template", "square")
     background = pick_background(account["background"], n_before, c.get("background_every", 20)) \
         if template == "circle" else None
+    seed = f"{account.get('nick', '')}:{n_before}"  # one background variant per reel of the account
     if not b["top"]:
         raise NoBannerSet("no Playerok banner set is valid today: add a new set to banners.sets")
     check_banner_place(cfg)
@@ -365,7 +385,7 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_ind
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
         frame = Path(tmp) / "frame.png"
-        make_frame_png(background, cfg, frame, template)
+        make_frame_png(background, cfg, frame, template, seed)
         m = 0.0
         if t is None:
             dur = compose_base(src, frame, cfg, part, c["crf"], c["preset"], text, tmp, template)
@@ -380,8 +400,7 @@ def build(src, account: dict, cfg, out, text=None, use_midroll=True, midroll_ind
         raise ValueError("; ".join(problems))
     os.replace(part, out)
     if background:  # the grid shows the background alone, as on the reference accounts
-        ImageOps.fit(Image.open(background).convert("RGB"), (c["width"], c["height"])).save(
-            out.with_suffix(".jpg"), quality=92)
+        background_image(background, cfg, seed).save(out.with_suffix(".jpg"), quality=92)
     previews = save_previews(cfg, out, out.stem, (t, t + m) if t is not None else None)
     return {"duration": round(final, 3), "midroll_at": t, "midroll_dur": round(m, 3),
             "banner_type": "voiced" if t is not None else "static", "previews": previews,

@@ -51,6 +51,18 @@ def test_pick_background_series(tmp_path):
         video.pick_background(d, 0, 20)
 
 
+def test_background_variation(cfg, tmp_path):
+    from PIL import Image, ImageChops
+    src = tmp_path / "art.png"
+    Image.radial_gradient("L").resize((1080, 1920)).convert("RGB").save(src)  # non-uniform, so changes show
+    v = lambda seed: video.background_image(src, cfg, seed)                 # noqa: E731
+    assert v("acc:1").size == (1080, 1920)
+    assert ImageChops.difference(v("acc:1"), v("acc:1")).getbbox() is None   # same reel, same picture (cover = reel)
+    assert ImageChops.difference(v("acc:1"), v("acc:2")).getbbox()           # next reel: a different version
+    cfg["compose"]["background_variation"] = False
+    assert ImageChops.difference(v("acc:1"), v("acc:2")).getbbox() is None   # switched off: plain fit
+
+
 def test_compose_adds_silence_when_source_has_no_audio(cfg, media, tmp_path):
     video.make_frame_png(media["bg"], cfg, tmp_path / "f.png")
     out = tmp_path / "base.mp4"
@@ -112,7 +124,7 @@ def test_build_short_is_static(cfg, media, tmp_path):
     assert abs(meta["duration"] - 8) < 0.1
     from PIL import Image
     cover = Image.open(tmp_path / "s.jpg")                                    # circle: cover = background alone
-    assert cover.size == (1080, 1920) and max(abs(a - b) for a, b in zip(cover.getpixel((540, 1150)), (20, 30, 70))) < 8
+    assert cover.size == (1080, 1920) and max(abs(a - b) for a, b in zip(cover.getpixel((540, 1150)), (20, 30, 70))) < 16
 
 
 def test_build_with_text(cfg, media, tmp_path):
