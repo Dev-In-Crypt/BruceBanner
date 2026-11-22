@@ -19,6 +19,9 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
    cd /opt/clips && sudo -u clips python3 -m venv .venv && sudo -u clips .venv/bin/pip install -r requirements.txt
    sudo -u clips cp config.example.toml config.toml && sudo -u clips cp .env.example .env && sudo chmod 600 .env
    ```
+   Проверка языка речи (Playerok платит только за русский контент) при первом скачивании роликов сама
+   загрузит модель распознавания, около 140 МБ. Ролики с явной нерусской речью получают статус `rejected`
+   с причиной `speech_en` и т.п., ролики без речи проходят. Надписи на экране не проверяются.
 2. Заполнить `.env` (ключи: AdsPower, Apify, Telegram, Notion) и `config.toml` (аккаунты, доноры, баннеры).
    Положить файлы в `assets/`: баннеры Playerok и фон каждого аккаунта.
 3. Установить AdsPower для Linux (файл .deb с сайта AdsPower), проверить путь к программе:

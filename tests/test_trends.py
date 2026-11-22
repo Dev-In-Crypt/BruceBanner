@@ -92,6 +92,38 @@ def test_download_dedup(cfg, con, media, tmp_path, monkeypatch):
     assert not (cfg["data"] / "sources" / "REUP.mp4").exists()
 
 
+def test_foreign_speech_rules(cfg, media, monkeypatch):
+    from types import SimpleNamespace as NS
+    f = cfg["filter"]
+
+    def model(lang, prob, speech=True):
+        segs = [NS(text="x")] if speech else []
+        return lambda name: NS(transcribe=lambda audio, **kw: (iter(segs), NS(language=lang, language_probability=prob)))
+
+    for args, want in ((("en", 0.99), "en"), (("ru", 0.95), None), (("en", 0.4), None), (("en", 0.99, False), None)):
+        monkeypatch.setattr(trends, "_whisper", model(*args))
+        assert trends.foreign_speech(media["src25"], f) == want, args   # foreign / Russian / unsure / no speech
+    assert trends.foreign_speech(media["src15_noaudio"], f) is None     # no audio track: nothing to check
+
+
+def test_download_rejects_foreign_speech(cfg, con, media, monkeypatch):
+    cfg["filter"]["speech_check"] = True
+
+    def fake_download(c, src):
+        p = c["data"] / "sources" / f"{src['shortcode']}.mp4"
+        shutil.copy(media["src25"], p)
+        return p
+
+    monkeypatch.setattr(trends, "download_one", fake_download)
+    monkeypatch.setattr(trends, "foreign_speech", lambda path, f: "en")
+    con.execute("INSERT INTO sources (shortcode, donor, url, video_url, fetched_at, state) "
+                "VALUES ('EN', 'd', 'u', 'v', '2026-11-17T00:00:00Z', 'selected')")
+    con.commit()
+    assert trends.download(cfg, con, False) == {"rejected": 1}
+    assert con.execute("SELECT state, reason FROM sources").fetchone()[:] == ("rejected", "speech_en")
+    assert not (cfg["data"] / "sources" / "EN.mp4").exists()
+
+
 def test_rank_score_prefers_voiced_and_shares(cfg):
     base = trends.rank_score(300_000, 100_000, 8, None, None, cfg)
     voiced = trends.rank_score(300_000, 100_000, 20, None, None, cfg)

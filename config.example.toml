@@ -98,6 +98,12 @@ min_duration_sec = 5                    # sources shorter than the banner loop a
 max_duration_sec = 90
 
 [filter]
+# Playerok pays only for Russian content: after download, a clip with clear speech in another language is
+# rejected (reason speech_<lang>). Clips without speech (music, sounds) pass. On-screen text is not checked.
+speech_check = true
+speech_langs = ["ru"]
+speech_min_prob = 0.6                   # below this the language guess is unsure: the clip passes
+speech_model = "base"                   # faster-whisper model, ~140 MB, downloaded once on first use
 # Python regexes, matched against caption lowercased with "ё" replaced by "е". Starter list: tune it.
 blocked_patterns = [
   # crime, gangs

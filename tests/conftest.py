@@ -41,6 +41,7 @@ def media(tmp_path_factory):
 def cfg(tmp_path, media):
     c = config.load(config.ROOT / "config.example.toml", check_files=False)
     c["data"] = tmp_path
+    c["filter"]["speech_check"] = False  # no model download in tests; test_trends fakes the model
     for sub in config.DATA_SUBDIRS:
         (tmp_path / sub).mkdir(exist_ok=True)
     c["banners"]["top"] = str(media["banner"])

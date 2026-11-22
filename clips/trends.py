@@ -1,4 +1,5 @@
 """Trend intake: Apify fetch (spec module 2), selection (3), topic filter (4), download (6), dedup (5)."""
+import functools
 import json
 import logging
 import re
@@ -225,6 +226,30 @@ def download_one(cfg, src) -> Path:
     return path
 
 
+@functools.lru_cache(maxsize=1)
+def _whisper(model: str):
+    from faster_whisper import WhisperModel  # heavy: loaded once, only when a download needs it
+    return WhisperModel(model, device="cpu", compute_type="int8")
+
+
+def foreign_speech(path, f: dict) -> str | None:
+    """Language code when the clip has clear speech not in filter.speech_langs (Playerok: Russian content only).
+    None for allowed speech, no speech at all (music, sounds) or an unsure guess."""
+    import numpy as np
+    if video.probe(path)["audio"] is None:
+        return None
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-t", "60", "-vn", "-ac", "1", "-ar", "16000",
+                          "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    segments, info = _whisper(f["speech_model"]).transcribe(
+        np.frombuffer(raw, np.float32), beam_size=1, vad_filter=True, without_timestamps=True,
+        condition_on_previous_text=False)
+    if next(iter(segments), None) is None:  # the voice filter found no speech
+        return None
+    if info.language in f["speech_langs"] or info.language_probability < f["speech_min_prob"]:
+        return None
+    return info.language
+
+
 def parse_hashes(s: str) -> list[int]:
     return [int(h, 16) for h in s.split()]
 
@@ -237,17 +262,21 @@ def download(cfg, con, dry) -> dict:
             continue
         try:
             path = download_one(cfg, s)
-            hashes = video.video_hashes(path, cfg["dedup"]["frames"])
+            lang = foreign_speech(path, cfg["filter"]) if cfg["filter"]["speech_check"] else None
+            hashes = None if lang else video.video_hashes(path, cfg["dedup"]["frames"])
         except Exception as e:  # noqa: BLE001
             log.warning("source %s failed: %s", s["shortcode"], e)
             state, fields = "failed", {"reason": str(e)[:300]}
         else:
             # ponytail: linear scan over all hashes; fine for tens of thousands, add a BK-tree if it gets slow
-            dup = next((o["shortcode"] for o in con.execute(
+            dup = None if lang else next((o["shortcode"] for o in con.execute(
                 "SELECT shortcode, phash FROM sources WHERE phash IS NOT NULL AND state != 'duplicate' AND id != ?",
                 (s["id"],)) if video.hash_distance(hashes, parse_hashes(o["phash"])) <= cfg["dedup"]["max_distance"]),
                 None)
-            if dup:
+            if lang:  # Playerok pays only for Russian content
+                path.unlink(missing_ok=True)
+                state, fields = "rejected", {"reason": f"speech_{lang}"}
+            elif dup:
                 path.unlink(missing_ok=True)
                 state, fields = "duplicate", {"reason": f"dup_of:{dup}"}
             else:
