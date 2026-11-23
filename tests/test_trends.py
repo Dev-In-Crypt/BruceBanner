@@ -92,21 +92,31 @@ def test_download_dedup(cfg, con, media, tmp_path, monkeypatch):
     assert not (cfg["data"] / "sources" / "REUP.mp4").exists()
 
 
-def test_foreign_speech_rules(cfg, media, monkeypatch):
+def test_speech_rules(cfg, media, monkeypatch):
     from types import SimpleNamespace as NS
     f = cfg["filter"]
 
     def model(lang, prob, speech=True):
-        segs = [NS(text="x")] if speech else []
+        segs = [NS(text="привет"), NS(text="мир")] if speech else []
         return lambda name: NS(transcribe=lambda audio, **kw: (iter(segs), NS(language=lang, language_probability=prob)))
 
-    for args, want in ((("en", 0.99), "en"), (("ru", 0.95), None), (("en", 0.4), None), (("en", 0.99, False), None)):
+    for args, want in ((("en", 0.99), ("en", "")), (("ru", 0.95), (None, "привет мир")),   # foreign / Russian
+                       (("en", 0.4), (None, "привет мир")), (("en", 0.99, False), (None, ""))):  # unsure / no speech
         monkeypatch.setattr(trends, "_whisper", model(*args))
-        assert trends.foreign_speech(media["src25"], f) == want, args   # foreign / Russian / unsure / no speech
-    assert trends.foreign_speech(media["src15_noaudio"], f) is None     # no audio track: nothing to check
+        assert trends.speech(media["src25"], f) == want, args
+    assert trends.speech(media["src15_noaudio"], f) == (None, "")      # no audio track: nothing to check
 
 
-def test_download_rejects_foreign_speech(cfg, con, media, monkeypatch):
+def test_forbidden_film_topics(cfg):
+    b = lambda c: trends.blocked_reason(c, "d", cfg)  # noqa: E731
+    for text in ("Лучшая сцена из Бригады", "Слово пацана, 5 серия", "Брат 2 концовка", "Peaky Blinders edit",
+                 "дембель неизбежен", "Солдаты, 3 сезон"):
+        assert b(text), text
+    for text in ("Мой брат опять съел торт", "Кот против пылесоса", "Ирония судьбы, лучшая сцена"):
+        assert b(text) is None, text
+
+
+def test_download_rejects_foreign_speech_and_topics(cfg, con, media, monkeypatch):
     cfg["filter"]["speech_check"] = True
 
     def fake_download(c, src):
@@ -115,13 +125,18 @@ def test_download_rejects_foreign_speech(cfg, con, media, monkeypatch):
         return p
 
     monkeypatch.setattr(trends, "download_one", fake_download)
-    monkeypatch.setattr(trends, "foreign_speech", lambda path, f: "en")
-    con.execute("INSERT INTO sources (shortcode, donor, url, video_url, fetched_at, state) "
-                "VALUES ('EN', 'd', 'u', 'v', '2026-11-17T00:00:00Z', 'selected')")
+    heard = {"EN": ("en", ""), "GANG": (None, "это наша бригада, пацаны"), "OK": (None, "смотри какой кот")}
+    monkeypatch.setattr(trends, "speech", lambda path, f: heard[path.stem])
+    for code in heard:
+        con.execute("INSERT INTO sources (shortcode, donor, url, video_url, fetched_at, state) "
+                    "VALUES (?, 'd', 'u', 'v', '2026-11-17T00:00:00Z', 'selected')", (code,))
     con.commit()
-    assert trends.download(cfg, con, False) == {"rejected": 1}
-    assert con.execute("SELECT state, reason FROM sources").fetchone()[:] == ("rejected", "speech_en")
-    assert not (cfg["data"] / "sources" / "EN.mp4").exists()
+    assert trends.download(cfg, con, False) == {"rejected": 2, "ready": 1}
+    got = {r[0]: (r[1], r[2]) for r in con.execute("SELECT shortcode, state, reason FROM sources")}
+    assert got["EN"] == ("rejected", "speech_en")
+    assert got["GANG"] == ("rejected", r"speech_blocked_keyword:\bбригад[аыуе]\b")   # forbidden topic heard in the clip
+    assert got["OK"][0] == "ready"
+    assert not (cfg["data"] / "sources" / "EN.mp4").exists() and not (cfg["data"] / "sources" / "GANG.mp4").exists()
 
 
 def test_rank_score_prefers_voiced_and_shares(cfg):

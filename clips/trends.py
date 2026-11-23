@@ -232,22 +232,24 @@ def _whisper(model: str):
     return WhisperModel(model, device="cpu", compute_type="int8")
 
 
-def foreign_speech(path, f: dict) -> str | None:
-    """Language code when the clip has clear speech not in filter.speech_langs (Playerok: Russian content only).
-    None for allowed speech, no speech at all (music, sounds) or an unsure guess."""
+def speech(path, f: dict) -> tuple[str | None, str]:
+    """(language code, "") when the clip has clear speech not in filter.speech_langs (Playerok: Russian content
+    only), else (None, transcript) for the forbidden-topic check. No speech (music, sounds): (None, "")."""
     import numpy as np
     if video.probe(path)["audio"] is None:
-        return None
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-t", "60", "-vn", "-ac", "1", "-ar", "16000",
+        return None, ""
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", "16000",
                           "-f", "f32le", "-"], capture_output=True, check=True).stdout
     segments, info = _whisper(f["speech_model"]).transcribe(
         np.frombuffer(raw, np.float32), beam_size=1, vad_filter=True, without_timestamps=True,
         condition_on_previous_text=False)
-    if next(iter(segments), None) is None:  # the voice filter found no speech
-        return None
-    if info.language in f["speech_langs"] or info.language_probability < f["speech_min_prob"]:
-        return None
-    return info.language
+    it = iter(segments)  # lazy: each next() decodes more audio
+    first = next(it, None)
+    if first is None:  # the voice filter found no speech
+        return None, ""
+    if info.language not in f["speech_langs"] and info.language_probability >= f["speech_min_prob"]:
+        return info.language, ""
+    return None, " ".join(seg.text for seg in (first, *it))
 
 
 def parse_hashes(s: str) -> list[int]:
@@ -262,20 +264,24 @@ def download(cfg, con, dry) -> dict:
             continue
         try:
             path = download_one(cfg, s)
-            lang = foreign_speech(path, cfg["filter"]) if cfg["filter"]["speech_check"] else None
-            hashes = None if lang else video.video_hashes(path, cfg["dedup"]["frames"])
+            lang, said = speech(path, cfg["filter"]) if cfg["filter"]["speech_check"] else (None, "")
+            topic = blocked_reason(said, "", cfg)  # forbidden topics heard in the clip (films: crime, army)
+            hashes = None if lang or topic else video.video_hashes(path, cfg["dedup"]["frames"])
         except Exception as e:  # noqa: BLE001
             log.warning("source %s failed: %s", s["shortcode"], e)
             state, fields = "failed", {"reason": str(e)[:300]}
         else:
             # ponytail: linear scan over all hashes; fine for tens of thousands, add a BK-tree if it gets slow
-            dup = None if lang else next((o["shortcode"] for o in con.execute(
+            dup = None if lang or topic else next((o["shortcode"] for o in con.execute(
                 "SELECT shortcode, phash FROM sources WHERE phash IS NOT NULL AND state != 'duplicate' AND id != ?",
                 (s["id"],)) if video.hash_distance(hashes, parse_hashes(o["phash"])) <= cfg["dedup"]["max_distance"]),
                 None)
             if lang:  # Playerok pays only for Russian content
                 path.unlink(missing_ok=True)
                 state, fields = "rejected", {"reason": f"speech_{lang}"}
+            elif topic:  # Playerok forbids crime, gang and army themes, above all in films and series
+                path.unlink(missing_ok=True)
+                state, fields = "rejected", {"reason": f"speech_{topic}"}
             elif dup:
                 path.unlink(missing_ok=True)
                 state, fields = "duplicate", {"reason": f"dup_of:{dup}"}
