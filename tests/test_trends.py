@@ -74,7 +74,10 @@ def test_download_dedup(cfg, con, media, tmp_path, monkeypatch):
     copy = tmp_path / "reupload.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(media["src25"]), "-vf", "scale=540:960",
                     "-crf", "33", str(copy)], check=True)
-    files = {"ORIG": media["src25"], "REUP": copy, "OTHER": media["midroll"]}
+    other = tmp_path / "other.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "smptebars=size=720x1280:rate=30:duration=15",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(other)], check=True)
+    files = {"ORIG": media["src25"], "REUP": copy, "OTHER": other, "SHORT": media["midroll"]}
 
     def fake_download(c, src):
         p = c["data"] / "sources" / f"{src['shortcode']}.mp4"
@@ -82,13 +85,14 @@ def test_download_dedup(cfg, con, media, tmp_path, monkeypatch):
         return p
 
     monkeypatch.setattr(trends, "download_one", fake_download)
-    for i, code in enumerate(("ORIG", "REUP", "OTHER")):
+    for i, code in enumerate(("ORIG", "REUP", "OTHER", "SHORT")):
         con.execute("INSERT INTO sources (shortcode, donor, url, video_url, fetched_at, state) VALUES (?,?,?,?,?, 'selected')",
                     (code, "d", "u", "v", f"2026-11-17T00:00:0{i}Z"))
     con.commit()
-    assert trends.download(cfg, con, False) == {"ready": 2, "duplicate": 1}
+    assert trends.download(cfg, con, False) == {"ready": 2, "duplicate": 1, "rejected": 1}
     st = dict(con.execute("SELECT shortcode, state FROM sources"))
-    assert st == {"ORIG": "ready", "REUP": "duplicate", "OTHER": "ready"}
+    assert st == {"ORIG": "ready", "REUP": "duplicate", "OTHER": "ready", "SHORT": "rejected"}  # 3 s: checked
+    assert con.execute("SELECT reason FROM sources WHERE shortcode = 'SHORT'").fetchone()[0] == "duration"
     assert not (cfg["data"] / "sources" / "REUP.mp4").exists()
 
 

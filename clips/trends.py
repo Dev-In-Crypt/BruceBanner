@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from clips import config, db, video
+from clips import config, db, graph, video
 
 log = logging.getLogger(__name__)
 API = "https://api.apify.com/v2"
@@ -34,6 +34,15 @@ def run_actor(cfg, run_input: dict) -> list[dict]:
         raise RuntimeError(f"apify run {run['id']} ended {run['status']}")
     return s.get(f"{API}/datasets/{run['defaultDatasetId']}/items",
                  params={"clean": "true", "format": "json"}, timeout=120).json()
+
+
+def reels(cfg, usernames, limit, days=None, pinned=False, apify_extra=None) -> list[dict]:
+    """Latest reels of these accounts in Apify's item format, from trends.source: "graph" (free Instagram API,
+    professional accounts only, no duration) or "apify" (paid)."""
+    if cfg["trends"].get("source", "apify") == "graph":
+        return graph.reels(cfg, usernames, limit, days)
+    return run_actor(cfg, {"username": usernames, "resultsLimit": limit, "skipPinnedPosts": not pinned,
+                           **({"onlyPostsNewerThan": f"{days} days"} if days else {}), **(apify_extra or {})})
 
 
 def dump_raw(cfg, name, items) -> Path:
@@ -83,18 +92,15 @@ def fetch(cfg, con, dry, from_file=None) -> int:
         regular = [d for d in donors if d not in seed]
         items = []
         if seed:
-            items += run_actor(cfg, {"username": seed, "resultsLimit": t["seed_results"], "skipPinnedPosts": True,
-                                     **extra})
+            items += reels(cfg, seed, t["seed_results"], apify_extra=extra)
         if regular:
-            items += run_actor(cfg, {"username": regular, "resultsLimit": t["results_per_donor"],
-                                     "onlyPostsNewerThan": f"{t['fresh_days']} days", "skipPinnedPosts": True,
-                                     **extra})
+            items += reels(cfg, regular, t["results_per_donor"], t["fresh_days"], apify_extra=extra)
         dump_raw(cfg, "trends", items)
     now, n = db.now_iso(), 0
     rows = [(i["shortCode"], (i.get("ownerUsername") or "").lower(), f"https://www.instagram.com/reel/{i['shortCode']}/",
              i["videoUrl"], i.get("caption"), views_of(i, cfg), i.get("likesCount"), i.get("videoDuration"),
              ts(i.get("timestamp")), now, groups.get((i.get("ownerUsername") or "").lower(), "memes"),
-             i.get("sharesCount")) for i in items if i.get("shortCode") and i.get("videoUrl")]
+             i.get("sharesCount")) for i in items if i.get("shortCode")]  # no videoUrl (graph, music rights): yt-dlp
     if not dry:
         with con:
             for r in rows:
@@ -122,8 +128,8 @@ def blocked_reason(caption: str | None, donor: str, cfg) -> str | None:
 
 
 def decide(views, age_hours, duration, median, t) -> tuple[str, str | None]:
-    if duration is None or not t["min_duration_sec"] <= duration <= t["max_duration_sec"]:
-        return "rejected", "duration"
+    if duration is not None and not t["min_duration_sec"] <= duration <= t["max_duration_sec"]:
+        return "rejected", "duration"  # unknown (graph source): checked after download
     if age_hours > t["max_age_hours"]:
         return "rejected", "too_old"
     if median is None:
@@ -264,6 +270,15 @@ def download(cfg, con, dry) -> dict:
             continue
         try:
             path = download_one(cfg, s)
+            duration = video.probe(path)["duration"]
+            t = cfg["trends"]
+            if not max(t["min_duration_sec"], video.banner_duration(cfg)) <= duration <= t["max_duration_sec"]:
+                path.unlink(missing_ok=True)  # the graph source gives no duration before download
+                with con:
+                    con.execute("UPDATE sources SET state = 'rejected', reason = 'duration', duration = ? WHERE id = ?",
+                                (duration, s["id"]))
+                counts["rejected"] = counts.get("rejected", 0) + 1
+                continue
             lang, said = speech(path, cfg["filter"]) if cfg["filter"]["speech_check"] else (None, "")
             topic = blocked_reason(said, "", cfg)  # forbidden topics heard in the clip (films: crime, army)
             hashes = None if lang or topic else video.video_hashes(path, cfg["dedup"]["frames"])
@@ -286,7 +301,8 @@ def download(cfg, con, dry) -> dict:
                 path.unlink(missing_ok=True)
                 state, fields = "duplicate", {"reason": f"dup_of:{dup}"}
             else:
-                state, fields = "ready", {"file_path": str(path), "phash": " ".join(f"{h:016x}" for h in hashes)}
+                state, fields = "ready", {"file_path": str(path), "phash": " ".join(f"{h:016x}" for h in hashes),
+                                          "duration": duration}
         counts[state] = counts.get(state, 0) + 1
         with con:
             con.execute(f"UPDATE sources SET state = ?, {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",

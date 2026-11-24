@@ -60,9 +60,8 @@ def harvest(cfg, con, dry, from_file=None) -> dict:
             items = [i for i in json.loads(Path(from_file).read_text(encoding="utf-8"))
                      if (i.get("ownerUsername") or "").lower() in donors]
         else:
-            items = trends.run_actor(cfg, {"username": c[f"donors_{lang}"][topic],
-                                           "resultsLimit": c["results_per_donor"],
-                                           "onlyPostsNewerThan": f"{c['fresh_days']} days", "skipPinnedPosts": False})
+            items = trends.reels(cfg, c[f"donors_{lang}"][topic], c["results_per_donor"], c["fresh_days"],
+                                 pinned=True)
             trends.dump_raw(cfg, f"captions_{lang}_{topic}", items)
         kept = 0
         for i in items:

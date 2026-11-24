@@ -106,9 +106,8 @@ def collect(cfg, con, dry, from_file=None, now=None) -> dict:
     if from_file:
         items = json.loads(Path(from_file).read_text(encoding="utf-8"))
     elif nicks:
-        items = trends.run_actor(cfg, {"username": nicks, "resultsLimit": cfg["apify"]["stats_results_per_account"],
-                                       "onlyPostsNewerThan": f"{p['deadline_days'] + 1} days",
-                                       "skipPinnedPosts": False})
+        items = trends.reels(cfg, nicks, cfg["apify"]["stats_results_per_account"], p["deadline_days"] + 1,
+                             pinned=True)
         trends.dump_raw(cfg, "stats", items)
     else:
         items = []

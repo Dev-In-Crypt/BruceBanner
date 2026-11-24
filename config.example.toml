@@ -82,6 +82,8 @@ left = 65
 right = 120                             # like / comment / share buttons
 
 [trends]
+source = "graph"                        # graph: free Instagram API (Business Discovery, donors must be
+                                        # professional accounts) | apify: paid scraper
 # Picked 18.11.2026 from 30 meme pages found by Russian meme hashtags (docs/DONORS.md): typical views 3k-229k
 donors = ["hermesqz", "hu1iganyo", "ramzik.krsk24", "top.leym", "daring_555", "axyennyi_tip", "meme.actually"]
 donors_movies = ["callmeayub_17"]       # Russian film/series cuts (donor_group "movies", addendum 2b)
@@ -169,6 +171,9 @@ require_cover = false                   # true: a post whose cover upload fails 
 base_url = "http://127.0.0.1:50325"
 headless_browser = true
 request_interval_sec = 1.1              # AdsPower limits some endpoints to 1 request/second
+
+[graph]                                 # Instagram Graph API, token INSTAGRAM_GRAPH_TOKEN in .env
+base_url = "https://graph.facebook.com/v24.0"
 
 [apify]
 actor = "apify~instagram-reel-scraper"

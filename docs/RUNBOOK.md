@@ -22,8 +22,19 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
    Проверка языка речи (Playerok платит только за русский контент) при первом скачивании роликов сама
    загрузит модель распознавания, около 140 МБ. Ролики с явной нерусской речью получают статус `rejected`
    с причиной `speech_en` и т.п., ролики без речи проходят. Надписи на экране не проверяются.
-2. Заполнить `.env` (ключи: AdsPower, Apify, Telegram, Notion) и `config.toml` (аккаунты, доноры, баннеры).
+2. Заполнить `.env` (ключи: AdsPower, Instagram API, Telegram, Notion) и `config.toml` (аккаунты, доноры, баннеры).
    Положить файлы в `assets/`: баннеры Playerok и фон каждого аккаунта.
+
+   Ключ Instagram API (бесплатно, вместо Apify; один раз, затем продлевать каждые ~55 дней):
+   1. Отдельный Instagram-аккаунт, не рабочий. Переключить в профессиональный («Автор» или «Бизнес»).
+   2. В Facebook создать страницу и привязать к ней этот Instagram (настройки страницы, «Связанные аккаунты»).
+   3. developers.facebook.com: «Мои приложения», создать приложение типа «Бизнес».
+   4. Graph API Explorer: выбрать приложение, «User Token», разрешения `instagram_basic`, `pages_show_list`,
+      `pages_read_engagement`, `business_management`, нажать «Generate Access Token».
+   5. Access Token Debugger: вставить токен, нажать «Extend Access Token» (долгий, 60 дней).
+   6. Вписать в `.env` строку `INSTAGRAM_GRAPH_TOKEN=...`.
+   Доноры должны быть профессиональными аккаунтами, иначе API их не читает (в логе `graph: @ник skipped`).
+   Длительность ролика API не отдаёт: короткие и длинные отсеиваются после скачивания (причина `duration`).
 3. Установить AdsPower для Linux (файл .deb с сайта AdsPower), проверить путь к программе:
    `dpkg -L adspower-global | grep -i bin`. Если путь другой, поправить его в `deploy/systemd/adspower.service`.
 4. Включить автозапуск:
