@@ -61,7 +61,7 @@ def test_process_cuts_waits_for_review_then_plans(cfg, con, media, monkeypatch):
     assert vod.process(cfg, con, False) == {}                       # the same video is not cut twice
     row = con.execute("SELECT * FROM kick_clips").fetchone()
     assert (row["id"], row["hook"], row["title"], row["streamer"]) == ("vod:AbCdEf12:1", "", "AKO shows a $1M watch", "ako")
-    assert "clip-approve" in sent[0] and "vod:AbCdEf12:1" in sent[0]
+    assert "ждут проверки хуков" in sent[0] and "vod:AbCdEf12:1" in sent[0]
     cfg["clipping"]["min_duration_sec"] = 12
     assert kick.download(cfg, con, False) == {"ready": 1}           # same checks as Kick clips
     assert 18 < video.probe(row["video_url"])["duration"] < 23

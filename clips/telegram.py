@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -22,7 +24,9 @@ STATUS_RU = {"paused": "ограничение действий, пауза", "c
 HELP = ("Кнопки под сообщениями: Подано / Одобрено / Отклонено / Проверку прошёл.\n"
         "/status: сводка\n/geo <номер> <процент>: доля просмотров из России\n"
         "/bound <ник>: аккаунт привязан в боте Playerok\n"
-        "/limit <остаток> <всего>: лимит автора из раздела «Мои лимиты»")
+        "/limit <остаток> <всего>: лимит автора из раздела «Мои лимиты»\n"
+        "/go <кампания> [ссылка или файл]: горячий запуск кампании clipping (нарезка, хуки, посты сразу)\n"
+        "/clips: готовые клипы и посты по кампаниям clipping")
 
 
 class TelegramError(Exception):
@@ -114,6 +118,26 @@ def msg_error(command, exc) -> str:
 
 # ---------- bot (button answers) ----------
 
+def spawn(args: list[str]) -> None:
+    """A long job (campaign-go: minutes of cutting and posting) in its own process, so the bot keeps answering.
+    Its output goes to the bot's journal; it reports to Telegram itself when done."""
+    subprocess.Popen([sys.executable, "-m", "clips", *args], cwd=config.ROOT, start_new_session=True)
+
+
+def clipping_campaigns(cfg) -> list[str]:
+    return [c["name"] for c in cfg.get("clipping", {}).get("campaigns", [])]
+
+
+def clips_status(con) -> str:
+    rows = con.execute(
+        "SELECT k.campaign, SUM(k.state = 'ready' AND COALESCE(k.hook, '') != ''), "
+        "SUM(k.state = 'ready' AND COALESCE(k.hook, '') = '' AND COALESCE(k.title, '') != ''), "
+        "(SELECT COUNT(*) FROM clip_posts p WHERE p.campaign = k.campaign AND p.state = 'published') "
+        "FROM kick_clips k GROUP BY k.campaign").fetchall()
+    return "\n".join(f"{c}: готово {r or 0}, ждут одобрения {w or 0}, опубликовано {p}" for c, r, w, p in rows) \
+        or "Клипов пока нет"
+
+
 def _pub_exists(con, pid) -> bool:
     return con.execute("SELECT 1 FROM publications WHERE id = ?", (pid,)).fetchone() is not None
 
@@ -130,6 +154,17 @@ def handle_update(con, cfg, update, pending: dict) -> list[tuple[int, str]]:
         if kind == "acc":
             db.set_account_status(con, arg, "active")
             return [(chat, f"Аккаунт @{arg} снова активен")]
+        if kind in ("cl_ok", "cl_go"):  # hook review of a cut campaign video (vod.process)
+            if arg not in clipping_campaigns(cfg):
+                return [(chat, f"Кампании {arg} нет в настройках")]
+            from clips import vod
+            n = vod.approve(con, [r[0] for r in con.execute(
+                "SELECT id FROM kick_clips WHERE campaign = ? AND state = 'ready' AND COALESCE(hook, '') = '' "
+                "AND COALESCE(title, '') != ''", (arg,))])
+            if kind == "cl_ok":
+                return [(chat, f"{arg}: одобрено хуков {n}. Посты пойдут по расписанию")]
+            spawn(["campaign-go", arg, "--approve"])
+            return [(chat, f"{arg}: одобрено хуков {n}, запускаю посты на все аккаунты кампании. Итог пришлю")]
         pid = int(arg) if arg.isdigit() else None
         if pid is None or not _pub_exists(con, pid):
             return [(chat, "Публикация не найдена")]
@@ -146,6 +181,15 @@ def handle_update(con, cfg, update, pending: dict) -> list[tuple[int, str]]:
                      else f"Введите причину отказа для pub#{pid}")]
         return [(chat, "Неизвестная кнопка")]
     text = (msg.get("text") or "").strip()
+    if text.startswith("/go"):
+        parts = text.split()
+        if len(parts) < 2 or parts[1] not in clipping_campaigns(cfg):
+            return [(chat, "Формат: /go <кампания> [ссылка или файл]. Кампании: "
+                     + (", ".join(clipping_campaigns(cfg)) or "нет"))]
+        spawn(["campaign-go", parts[1], "--approve", *[a for s in parts[2:] for a in ("--source", s)]])
+        return [(chat, f"{parts[1]}: горячий запуск начат. Итог пришлю, когда посты выйдут")]
+    if text.startswith("/clips"):
+        return [(chat, clips_status(con))]
     if text.startswith("/status"):
         from clips import reports
         return [(chat, reports.summary_text(con, cfg))]

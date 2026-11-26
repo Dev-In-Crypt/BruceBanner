@@ -169,7 +169,9 @@ def process(cfg, con, dry, only=None) -> dict:
             counts["cut"] = counts.get("cut", 0) + len(moments)
             if camp.get("review", True) and lines:
                 telegram.send(f"Кампания {camp['name']}: {len(lines)} клипов из «{info.get('title', url)}» ждут "
-                              "проверки хуков (clip-approve):\n" + "\n".join(lines))
+                              "проверки хуков:\n" + "\n".join(lines),
+                              buttons=[[("✅ Одобрить все", f"cl_ok:{camp['name']}"),
+                                        ("🚀 Одобрить и запустить", f"cl_go:{camp['name']}")]])
     log.info("vod: %s", counts)
     return counts
 

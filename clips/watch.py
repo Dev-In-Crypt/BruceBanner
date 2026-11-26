@@ -50,7 +50,8 @@ def message(c: dict, hot: bool) -> str:
     tag = f" [{', '.join(x for x in c['labels'] if x)}]" if any(c["labels"]) else ""
     return (f"{'🔥 ' if hot else ''}promote.fun: новая кампания «{c['title']}»{tag}\n"
             f"${c['rate']} за 1 000 просмотров, бюджет ${c['budget']:,.0f}, {plat}\n"
-            f"https://www.promote.fun/campaigns/{c['slug']}")
+            f"https://www.promote.fun/campaigns/{c['slug']}\n"
+            "Вступите в кампанию. Когда контент у нас: /go <кампания> <ссылка на контент>")
 
 
 def run(cfg, con, dry) -> list[dict]:

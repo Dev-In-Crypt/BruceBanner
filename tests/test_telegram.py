@@ -134,3 +134,27 @@ def test_bot_bound_and_limit(cfg, con, bot):
     replies = [t for _, t in h(say("/limit 30000 100000"))]
     assert "осталось 30 000 из 100 000" in replies[0] and "Запросите увеличение" in replies[1]
     assert "Формат" in h(say("/limit 5 1"))[0][1]
+
+
+def test_clipping_buttons_and_go(cfg, con, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_OPERATOR_IDS", "42")
+    cfg["clipping"]["campaigns"] = [{"name": "cc", "source": "video", "subject": "S"}]
+    for cid, hook in (("a", ""), ("b", ""), ("c", "own hook")):
+        con.execute("INSERT INTO kick_clips (id, campaign, streamer, title, video_url, fetched_at, state, hook) "
+                    "VALUES (?, 'cc', 's', 'AI ' || ?, 'u', 't', 'ready', ?)", (cid, cid, hook))
+    con.commit()
+    spawned = []
+    monkeypatch.setattr(telegram, "spawn", lambda args: spawned.append(args))
+    cb = lambda data: {"callback_query": {"id": "1", "data": data, "from": {"id": 42},  # noqa: E731
+                                          "message": {"chat": {"id": 42}}}}
+    msg = lambda text: {"message": {"text": text, "from": {"id": 42}, "chat": {"id": 42}}}  # noqa: E731
+    assert "готово 1, ждут одобрения 2" in telegram.handle_update(con, cfg, msg("/clips"), {})[0][1]
+    assert "одобрено хуков 2" in telegram.handle_update(con, cfg, cb("cl_ok:cc"), {})[0][1]
+    assert dict(con.execute("SELECT id, hook FROM kick_clips")) == {"a": "AI a", "b": "AI b", "c": "own hook"}
+    telegram.handle_update(con, cfg, cb("cl_go:cc"), {})
+    telegram.handle_update(con, cfg, msg("/go cc https://cdn/trailer.mp4"), {})
+    assert spawned == [["campaign-go", "cc", "--approve"],
+                       ["campaign-go", "cc", "--approve", "--source", "https://cdn/trailer.mp4"]]
+    assert "Кампании: cc" in telegram.handle_update(con, cfg, msg("/go nope"), {})[0][1]
+    assert "нет в настройках" in telegram.handle_update(con, cfg, cb("cl_go:nope"), {})[0][1]
+    assert len(spawned) == 2
