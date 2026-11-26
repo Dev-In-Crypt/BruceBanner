@@ -39,3 +39,21 @@ def test_dry_run_on_old_database_sees_new_columns_without_writing(tmp_path):
     with pytest.raises(sqlite3.OperationalError):
         ro.execute("INSERT INTO accounts(nick, updated_at) VALUES ('x', 'y')")
     assert path.read_bytes() == before                                   # the file was not migrated
+
+
+def test_clip_posts_gets_platform_x_on_an_old_db(tmp_path):
+    import sqlite3
+    from clips import db
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA.replace("('tiktok','youtube','x')", "('tiktok','youtube')"))
+    old.execute("INSERT INTO kick_clips (id, campaign, streamer, video_url, fetched_at) VALUES ('k','c','s','u','t')")
+    old.execute("INSERT INTO clip_posts (clip_id, account, platform, campaign, scheduled_at, created_at) "
+                "VALUES ('k', 'a', 'tiktok', 'c', 't', 't')")
+    old.commit()
+    old.close()
+    con = db.connect(path)                                   # migrates: rebuilds clip_posts with the wider CHECK
+    con.execute("INSERT INTO clip_posts (clip_id, account, platform, campaign, scheduled_at, created_at) "
+                "VALUES ('k', 'b', 'x', 'c', 't', 't')")
+    assert [r[0] for r in con.execute("SELECT platform FROM clip_posts ORDER BY id")] == ["tiktok", "x"]
+    assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'clip_posts_account'").fetchone()

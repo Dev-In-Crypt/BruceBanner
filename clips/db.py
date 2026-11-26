@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS clip_posts (         -- one Kick clip on one TikTok /
   id           INTEGER PRIMARY KEY,
   clip_id      TEXT NOT NULL REFERENCES kick_clips(id),
   account      TEXT NOT NULL,                    -- clipping.accounts[].nick
-  platform     TEXT NOT NULL CHECK (platform IN ('tiktok','youtube')),
+  platform     TEXT NOT NULL CHECK (platform IN ('tiktok','youtube','x')),
   campaign     TEXT NOT NULL,
   state        TEXT NOT NULL DEFAULT 'planned' CHECK (state IN ('planned','built','published','failed')),
   scheduled_at TEXT NOT NULL,
@@ -213,7 +213,20 @@ def missing_tables(con) -> list[str]:
 def migrate(con) -> None:
     for table, column, decl in missing_columns(con):
         con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    widen_check(con, "clip_posts", "'x'")
     con.commit()
+
+
+def widen_check(con, table, marker) -> None:
+    """SQLite cannot change a CHECK in place: rebuild the table from SCHEMA when its CHECK lacks `marker`
+    (clip_posts got the platform 'x' on 26.11.2026). Rows are kept."""
+    row = con.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+    if not row or marker in row[0]:
+        return
+    create = re.search(rf"CREATE TABLE IF NOT EXISTS {table} \(.*?\n\);", SCHEMA, re.S).group(0)
+    indexes = re.findall(rf"CREATE INDEX IF NOT EXISTS \w+ ON {table}\(.*?\);", SCHEMA)
+    con.executescript(f"ALTER TABLE {table} RENAME TO {table}_old; {create} INSERT INTO {table} SELECT * FROM "
+                      f"{table}_old; DROP TABLE {table}_old; {' '.join(indexes)}")
 
 
 def connect(path, readonly=False) -> sqlite3.Connection:

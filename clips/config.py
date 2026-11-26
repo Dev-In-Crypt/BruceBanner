@@ -191,8 +191,8 @@ def validate(cfg: dict, check_files=True) -> None:
         if c.get("source") == "video" and not c.get("subject"):
             errors.append(f"campaign {c['name']}: a video campaign needs subject (who the clips are about)")
     for a in k["accounts"]:
-        if a.get("platform") not in ("tiktok", "youtube"):
-            errors.append(f"clipping account {a.get('nick')}: platform must be tiktok or youtube")
+        if a.get("platform") not in ("tiktok", "youtube", "x"):
+            errors.append(f"clipping account {a.get('nick')}: platform must be tiktok, youtube or x")
         if a.get("campaign") not in names:
             errors.append(f"clipping account {a.get('nick')}: campaign {a.get('campaign')!r} not in clipping.campaigns")
     for pat in k.get("blocked_patterns", []):

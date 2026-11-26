@@ -1,4 +1,4 @@
-"""Upload to TikTok and YouTube Shorts through the account's AdsPower profile (docs/CLIPPING_PLAN.md).
+"""Upload to TikTok, YouTube Shorts and X through the account's AdsPower profile (docs/CLIPPING_PLAN.md).
 
 Same browser plumbing as instagram.py: one profile at a time, a screenshot on every error.
 The selectors are starting points from the web UIs (Nov 2026): verify them on a real account and fix them only here.
@@ -33,7 +33,16 @@ YT = {
     "done": ['#done-button'],
     "link": 'a[href*="/shorts/"], a[href*="youtu.be/"]',
 }
-LOGGED_OUT = ("tiktok.com/login", "accounts.google.com", "/signin")
+X_COMPOSE = "https://x.com/compose/post"
+XS = {
+    "file": ['input[data-testid="fileInput"]', 'input[type="file"]'],
+    "text": ['div[data-testid="tweetTextarea_0"]', 'div[role="textbox"][contenteditable="true"]'],
+    "post": ['button[data-testid="tweetButton"]', 'button[data-testid="tweetButtonInline"]'],
+    "uploading": '[role="progressbar"]',
+    "status_link": 'article a[href*="/status/"]',
+}
+X_MAX_CHARS = 280  # a free account's post
+LOGGED_OUT = ("tiktok.com/login", "accounts.google.com", "/signin", "x.com/i/flow/login", "x.com/login")
 
 
 def logged_out(page) -> bool:
@@ -98,6 +107,29 @@ def upload_youtube(page, cfg, path, title, description) -> str:
     return url
 
 
+def upload_x(page, cfg, nick, path, text) -> str:
+    page.goto(X_COMPOSE, wait_until="domcontentloaded")
+    if logged_out(page):
+        raise instagram.HealthProblem("logged_out")
+    box = first(page, XS["text"], 30_000)
+    box.click()
+    page.keyboard.type(text[:X_MAX_CHARS], delay=random.randint(20, 60))
+    first(page, XS["file"], 30_000, visible=False).set_input_files(str(path))
+    post = first(page, XS["post"], 30_000)
+    wait_done(page, lambda: post.is_enabled() and post.get_attribute("aria-disabled") != "true"
+              and not page.locator(XS["uploading"]).count(), cfg["publish"]["upload_timeout_sec"], "x upload")
+    instagram.pause(cfg)
+    post.click()
+    page.wait_for_timeout(8000)
+    page.goto(f"https://x.com/{nick}", wait_until="domcontentloaded")
+    links = page.locator(f'{XS["status_link"]}[href*="/{nick}/status/"]')
+    links.first.wait_for(timeout=60_000)
+    # a pinned post would come first: take the highest status id, which is the newest
+    hrefs = [links.nth(i).get_attribute("href") for i in range(min(links.count(), 6))]
+    newest = max((h.split("/status/")[1].split("/")[0] for h in hrefs), key=int)
+    return f"https://x.com/{nick}/status/{newest}"
+
+
 def publish_one(cfg, con, post, acc, dry=False) -> str:
     if dry:
         log.info("dry-run: would post clip post %s to %s @%s", post["id"], acc["platform"], acc["nick"])
@@ -106,6 +138,8 @@ def publish_one(cfg, con, post, acc, dry=False) -> str:
         with instagram.session(cfg, acc) as page:
             if acc["platform"] == "tiktok":
                 url = upload_tiktok(page, cfg, acc["nick"], post["file_path"], post["caption"])
+            elif acc["platform"] == "x":
+                url = upload_x(page, cfg, acc["nick"], post["file_path"], post["caption"])
             else:
                 hook = con.execute("SELECT hook FROM kick_clips WHERE id = ?", (post["clip_id"],)).fetchone()[0]
                 url = upload_youtube(page, cfg, post["file_path"], hook or post["caption"], post["caption"])

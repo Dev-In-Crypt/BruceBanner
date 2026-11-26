@@ -251,7 +251,7 @@ bind_code = ""                          # code from the Playerok bot: the next r
 # Separate from the Instagram/Playerok part above: own accounts, own tables, own commands (kick-*, clip-*).
 [watch]                                 # watch-campaigns: new promote.fun campaigns -> Telegram (budgets go in 1-2 days)
 promote_api = "https://dapper-duck-781.convex.cloud"   # the public backend their web app reads the list from
-platforms = ["tiktok", "youtube"]       # alert only when the campaign takes one of these ([] = all)
+platforms = ["tiktok", "youtube", "twitter"]   # alert only when the campaign takes one of these ([] = all)
 highlight = "trailer|movie|film|tv|show|series|meme|episode"   # marked as hot in the alert
 
 [clipping]
@@ -342,7 +342,7 @@ post_window_hours = 72
 
 [[clipping.accounts]]
 nick = "example_tiktok"
-platform = "tiktok"                     # tiktok | youtube
+platform = "tiktok"                     # tiktok | youtube | x
 adspower_id = ""                        # US/UK proxy: English campaigns need 50%+ English-speaking audience
 campaign = "kick"
 daily_limit = 1
