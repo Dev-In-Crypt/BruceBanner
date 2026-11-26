@@ -286,8 +286,10 @@ bar_h = 110                             # brand bar right under the video: KICK 
 bar_logo = "assets/kick/logo.png"       # from the campaign Assets; missing: the word KICK in Kick green
 font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-[clipping.vod]                          # campaigns with source = "video": Claude picks moments of a long video
-model = "claude-opus-5-5"               # key ANTHROPIC_API_KEY in .env; a few cents per video
+[clipping.vod]                          # campaigns with source = "video": an OpenAI model picks moments of a long video
+model = "gpt-6-luna"                    # cheapest OpenAI model ($0.10 / $0.50 per 1M tokens): under a cent per video
+effort = "medium"                       # reasoning effort: none | low | medium | high
+                                        # key OPENAI_API_KEY in .env
 moments = 10
 min_sec = 20
 max_sec = 60

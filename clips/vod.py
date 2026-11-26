@@ -1,19 +1,20 @@
-"""Long campaign videos (a brief's YouTube link) -> short clips, picked and hooked by Claude (docs/CLIPPING_PLAN.md).
+"""Long campaign videos (a brief's YouTube link) -> short clips, picked and hooked by an LLM (docs/CLIPPING_PLAN.md).
 
 The video is downloaded once, transcribed with timestamps (faster-whisper, already used for the speech check),
-and Claude picks the moments where the campaign's subject is the focus and writes a hook that names the subject
+and the model (OpenAI, [clipping.vod]) picks the moments where the campaign's subject is the focus and writes a hook that names the subject
 (clipping.net briefs ban generic "I CAN'T BELIEVE THAT HAPPENED" posts). Each moment is cut and goes into
 kick_clips like a Kick clip, so the same checks, plan and posting apply. With review = true the AI hook waits in
 `title` until the operator approves it (`clip-approve`), because a clip without a hook is never planned.
 """
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-import anthropic
+import openai
 
 from clips import config, db, telegram, trends
 
@@ -78,21 +79,20 @@ def transcript(path, cfg, language) -> list[tuple[float, float, str]]:
 
 
 def pick_moments(cfg, camp, title, chapters, segs) -> list[dict]:
-    """Claude's moments, checked: length in range, inside the video, hook names the subject, no overlaps."""
+    """The model's moments, checked: length in range, inside the video, hook names the subject, no overlaps."""
     v = cfg["clipping"]["vod"]
     text = "\n".join(f"[{a:.1f}-{b:.1f}] {t}" for a, b, t in segs)
     prompt = PROMPT.format(subject=camp["subject"], n=v["moments"], min_s=v["min_sec"], max_s=v["max_sec"],
                            language=camp["language"], title=title, transcript=text,
                            chapters=", ".join(f"{c.get('title')} @{int(c.get('start_time', 0))}s" for c in chapters)
                            or "none")
-    client = anthropic.Anthropic(api_key=config.secret("ANTHROPIC_API_KEY"))
-    r = client.beta.messages.create(
-        model=v["model"], max_tokens=16000, betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-        output_config={"effort": "high", "format": {"type": "json_schema", "schema": SCHEMA}},
-        messages=[{"role": "user", "content": prompt}])
-    if r.stop_reason == "refusal":
-        raise RuntimeError(f"claude refused: {r.stop_details}")
-    moments = json.loads(next(b.text for b in r.content if b.type == "text"))["moments"]
+    client = openai.OpenAI(api_key=config.secret("OPENAI_API_KEY"))
+    r = client.responses.create(
+        model=v["model"], input=prompt, reasoning={"effort": v.get("effort", "medium")},
+        text={"format": {"type": "json_schema", "name": "moments", "strict": True, "schema": SCHEMA}})
+    if not r.output_text:  # refusal or cut off: nothing to parse
+        raise RuntimeError(f"model gave no moments (status {r.status})")
+    moments = json.loads(r.output_text)["moments"]
     end_of_video, out = segs[-1][1] if segs else 0, []
     for m in sorted(moments, key=lambda m: m["start"]):
         ok = (v["min_sec"] - 2 <= m["end"] - m["start"] <= v["max_sec"] + 2 and 0 <= m["start"] < m["end"] <= end_of_video + 1
@@ -114,7 +114,11 @@ def process(cfg, con, dry) -> dict:
     """Every not yet processed video of every `source = "video"` campaign -> cut clips in state selected
     (kick.download then checks speech, topics and duplicates, as for Kick clips)."""
     counts = {}
-    for camp in [c for c in cfg["clipping"]["campaigns"] if c.get("source") == "video"]:
+    camps = [c for c in cfg["clipping"]["campaigns"] if c.get("source") == "video"]
+    if camps and not os.environ.get("OPENAI_API_KEY"):  # config.secret would stop the whole kick run
+        log.warning("vod: OPENAI_API_KEY is empty, video campaigns skipped")
+        return counts
+    for camp in camps:
         for url in camp.get("videos", []):
             vid = video_id(url)
             if con.execute("SELECT 1 FROM kick_clips WHERE id LIKE ?", (f"vod:{vid}:%",)).fetchone():

@@ -13,22 +13,21 @@ def camp(cfg, review=True):
     return cfg["clipping"]["campaigns"][0]
 
 
-def fake_claude(monkeypatch, moments):
+def fake_llm(monkeypatch, moments):
     calls = []
 
     def create(**kw):
         calls.append(kw)
-        return NS(stop_reason="end_turn", content=[NS(type="text", text=json.dumps({"moments": moments}))])
+        return NS(status="completed", output_text=json.dumps({"moments": moments}))
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    monkeypatch.setattr(vod.anthropic, "Anthropic",
-                        lambda api_key: NS(beta=NS(messages=NS(create=create))))
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setattr(vod.openai, "OpenAI", lambda api_key: NS(responses=NS(create=create)))
     return calls
 
 
 def test_pick_moments_keeps_only_valid(cfg, monkeypatch):
     c = camp(cfg)
-    calls = fake_claude(monkeypatch, [
+    calls = fake_llm(monkeypatch, [
         {"start": 10, "end": 40, "hook": "AKO prices his rarest Patek", "why": "w"},
         {"start": 30, "end": 60, "hook": "AKO overlaps the first one", "why": "w"},      # overlaps
         {"start": 100, "end": 105, "hook": "AKO too short", "why": "w"},                  # 5 s
@@ -38,12 +37,15 @@ def test_pick_moments_keeps_only_valid(cfg, monkeypatch):
     got = vod.pick_moments(cfg, c, "Watch collection", [{"title": "Intro", "start_time": 0}], segs)
     assert [m["start"] for m in got] == [10, 300]
     kw = calls[0]
-    assert kw["output_config"]["format"]["type"] == "json_schema" and "AKO" in kw["messages"][0]["content"]
-    assert "[395.0-400.0] bye" in kw["messages"][0]["content"]
+    assert kw["text"]["format"]["type"] == "json_schema" and kw["model"] == "gpt-6-luna" and "AKO" in kw["input"]
+    assert "[395.0-400.0] bye" in kw["input"]
 
 
 def test_process_cuts_waits_for_review_then_plans(cfg, con, media, monkeypatch):
     c = camp(cfg)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert vod.process(cfg, con, False) == {}                       # no key: skipped, the kick run goes on
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
 
     def fake_download(cfg_, url, out_dir):
         p = out_dir / "vod.mp4"
