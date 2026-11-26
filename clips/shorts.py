@@ -1,11 +1,13 @@
 """Upload to TikTok, YouTube Shorts and X through the account's AdsPower profile (docs/CLIPPING_PLAN.md).
 
-Same browser plumbing as instagram.py: one profile at a time, a screenshot on every error.
+Same browser plumbing as instagram.py, a screenshot on every error. Several profiles at once
+(clipping.publish_workers), each profile's posts in one session.
 The selectors are starting points from the web UIs (Nov 2026): verify them on a real account and fix them only here.
 """
 import logging
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from clips import clipping, db, instagram, telegram
@@ -130,41 +132,72 @@ def upload_x(page, cfg, nick, path, text) -> str:
     return f"https://x.com/{nick}/status/{newest}"
 
 
-def publish_one(cfg, con, post, acc, dry=False) -> str:
-    if dry:
-        log.info("dry-run: would post clip post %s to %s @%s", post["id"], acc["platform"], acc["nick"])
-        return "built"
-    try:
-        with instagram.session(cfg, acc) as page:
-            if acc["platform"] == "tiktok":
-                url = upload_tiktok(page, cfg, acc["nick"], post["file_path"], post["caption"])
-            elif acc["platform"] == "x":
-                url = upload_x(page, cfg, acc["nick"], post["file_path"], post["caption"])
-            else:
-                hook = con.execute("SELECT hook FROM kick_clips WHERE id = ?", (post["clip_id"],)).fetchone()[0]
-                url = upload_youtube(page, cfg, post["file_path"], hook or post["caption"], post["caption"])
-    except Exception as e:  # noqa: BLE001
-        log.warning("clip post %s failed: %s", post["id"], e)
-        with con:
-            con.execute("UPDATE clip_posts SET state = 'failed', error = ? WHERE id = ?", (str(e)[:300], post["id"]))
-        telegram.send(f"{acc['platform']} @{acc['nick']}: пост не вышел ({str(e)[:200]})")
-        return "failed"
+def upload(page, cfg, con, post, acc) -> str:
+    if acc["platform"] == "tiktok":
+        return upload_tiktok(page, cfg, acc["nick"], post["file_path"], post["caption"])
+    if acc["platform"] == "x":
+        return upload_x(page, cfg, acc["nick"], post["file_path"], post["caption"])
+    hook = con.execute("SELECT hook FROM kick_clips WHERE id = ?", (post["clip_id"],)).fetchone()[0]
+    return upload_youtube(page, cfg, post["file_path"], hook or post["caption"], post["caption"])
+
+
+def mark(con, post, acc, url=None, error=None) -> str:
     with con:
-        con.execute("UPDATE clip_posts SET state = 'published', post_url = ?, published_at = ? WHERE id = ?",
-                    (url, db.now_iso(), post["id"]))
-    log.info("clip post %s published: %s", post["id"], url)
-    return "published"
+        if url:
+            con.execute("UPDATE clip_posts SET state = 'published', post_url = ?, published_at = ? WHERE id = ?",
+                        (url, db.now_iso(), post["id"]))
+        else:
+            con.execute("UPDATE clip_posts SET state = 'failed', error = ? WHERE id = ?", (str(error)[:300], post["id"]))
+    if url:
+        log.info("clip post %s published: %s", post["id"], url)
+        return "published"
+    log.warning("clip post %s failed: %s", post["id"], error)
+    telegram.send(f"{acc['platform']} @{acc['nick']}: пост не вышел ({str(error)[:200]})")
+    return "failed"
+
+
+def publish_group(cfg, db_path, posts, dry=False) -> list[str]:
+    """Every due post of one AdsPower profile (its TikTok, YouTube and X) in one browser session.
+    Runs in its own thread with its own DB connection (sqlite connections are per thread)."""
+    accs = [clipping.account(cfg, p["account"]) for p in posts]
+    if dry:
+        for p, a in zip(posts, accs):
+            log.info("dry-run: would post clip post %s to %s @%s", p["id"], a["platform"], a["nick"])
+        return ["built"] * len(posts)
+    con, out = db.connect(db_path), []
+    try:
+        with instagram.session(cfg, accs[0]) as page:
+            for i, (post, acc) in enumerate(zip(posts, accs)):
+                if i:
+                    instagram.pause(cfg)
+                try:
+                    out.append(mark(con, post, acc, url=upload(page, cfg, con, post, acc)))
+                except instagram.HealthProblem as e:  # logged out of this platform: the others may still work
+                    out.append(mark(con, post, acc, error=f"health: {e}"))
+                except Exception as e:  # noqa: BLE001
+                    instagram.save_debug(cfg, page, acc["nick"], f"{acc['platform']}_error")
+                    out.append(mark(con, post, acc, error=e))
+    except Exception as e:  # noqa: BLE001  (the profile did not open: every post of it fails)
+        out += [mark(con, p, a, error=e) for p, a in zip(posts[len(out):], accs[len(out):])]
+    finally:
+        con.close()
+    return out
 
 
 def run_publish(cfg, con, dry) -> list[str]:
+    """Due posts, grouped by AdsPower profile; clipping.publish_workers profiles at a time."""
     now = db.iso(datetime.now(timezone.utc))
     due = con.execute("SELECT * FROM clip_posts WHERE state = 'built' AND scheduled_at <= ? ORDER BY scheduled_at",
                       (now,)).fetchall()
+    groups = {}
+    for p in due:
+        groups.setdefault(clipping.account(cfg, p["account"])["adspower_id"], []).append(p)
+    db_path = con.execute("PRAGMA database_list").fetchone()[2]
+    workers = max(1, min(cfg["clipping"].get("publish_workers", 1), len(groups)))
     out = []
     with instagram.browser_lock(cfg):
-        for i, post in enumerate(due):
-            if i:
-                time.sleep(random.uniform(*cfg["clipping"]["between_accounts_sec"]))
-            out.append(publish_one(cfg, con, post, clipping.account(cfg, post["account"]), dry))
+        with ThreadPoolExecutor(workers) as ex:
+            for res in ex.map(lambda g: publish_group(cfg, db_path, g, dry), groups.values()):
+                out += res
     clipping.notify(cfg, con, dry)
     return out

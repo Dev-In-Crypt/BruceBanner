@@ -267,7 +267,9 @@ window_start = "11:00"
 window_end = "23:00"
 min_gap_minutes = 180                   # between posts of one account
 lead_minutes = 15
-between_accounts_sec = [60, 180]        # pause between accounts when publishing
+publish_workers = 3                     # AdsPower profiles posting at the same time (each: its TikTok, YouTube, X)
+hot_posts_per_account = 2               # campaign-go: posts per account right away, ignoring the window
+hot_gap_minutes = 20                    # campaign-go: between those posts of one account
 speech_check = true                     # speech must be in the campaign's language (filter.speech_* settings)
 # TikTok and YouTube cut gambling; clipping.net briefs forbid it too. Kick category slugs:
 blocked_categories = ["slots", "poker", "sports-betting"]

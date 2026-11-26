@@ -3,6 +3,7 @@
 Docs: https://localapi-doc-en.adspower.com/
 """
 import os
+import threading
 import time
 
 import requests
@@ -16,8 +17,16 @@ class AdsPowerError(Exception):
     """Local API answered with code != 0 (also: profile open on another device of the team)."""
 
 
+_LOCK = threading.Lock()  # parallel publishing: the 1 request/second limit is per client, not per thread
+
+
 def _get(cfg, path, **params) -> dict:
-    time.sleep(cfg["adspower"]["request_interval_sec"])  # some endpoints allow 1 request/second
+    with _LOCK:
+        time.sleep(cfg["adspower"]["request_interval_sec"])  # some endpoints allow 1 request/second
+        return _call(cfg, path, params)
+
+
+def _call(cfg, path, params) -> dict:
     key = os.environ.get("ADSPOWER_API_KEY", "")
     r = requests.get(cfg["adspower"]["base_url"] + path, params=params, timeout=120,
                      headers={"Authorization": f"Bearer {key}"} if key else {})

@@ -83,6 +83,11 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("clip-publish", parents=[common], help="clipping: post due videos, send links to submit")
     sub.add_parser("clip-stats", parents=[common], help="clipping: views of our posts, alert on deleted ones")
     sub.add_parser("watch-campaigns", parents=[common], help="new campaigns on promote.fun -> Telegram")
+    go = sub.add_parser("campaign-go", parents=[common],
+                        help="clipping: a campaign just launched -> cut, plan and post on all its accounts now")
+    go.add_argument("campaign")
+    go.add_argument("--source", action="append", default=[], help="extra video file or link for this run")
+    go.add_argument("--approve", action="store_true", help="use the AI hooks without waiting for clip-approve")
     sub.add_parser("publish", parents=[common], help="publish due built publications")
     st = sub.add_parser("stats", parents=[common], help="collect views, decide what to submit, notify")
     st.add_argument("--from-file", help="use a saved Apify JSON dump instead of calling Apify")
@@ -130,6 +135,8 @@ def run_clipping(args, cfg, con) -> None:
         shorts.run_publish(cfg, con, dry)
     elif args.command == "clip-stats":
         clipping.stats(cfg, con, dry)
+    elif args.command == "campaign-go":
+        print(json.dumps(clipping.go(cfg, con, args.campaign, args.source, args.approve, dry)))
     elif args.command == "watch-campaigns":
         from clips import watch
         watch.run(cfg, con, dry)
@@ -195,7 +202,7 @@ def run_command(args, cfg, con) -> int:
     elif args.command == "plan":
         planner.plan(cfg, con, dry)
     elif args.command in ("kick", "clip-approve", "add-clip", "clip-hook", "clip-preview", "clip-plan", "clip-publish", "clip-stats",
-                          "watch-campaigns"):
+                          "watch-campaigns", "campaign-go"):
         run_clipping(args, cfg, con)
     elif args.command == "publish":
         instagram.run_publish(cfg, con, dry)

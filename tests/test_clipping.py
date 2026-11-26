@@ -106,3 +106,87 @@ def test_stats_alerts_on_gone_posts(cfg, con, monkeypatch):
     assert clipping.stats(cfg, con, False) == {"ok": 1, "gone": 1}
     assert "https://t/gone" in sent[0]
     assert con.execute("SELECT last_views FROM clip_posts WHERE post_url = 'https://t/ok'").fetchone()[0] == 1234
+
+
+def ready_clips(con, media, n, campaign="kick"):
+    for i in range(n):
+        con.execute("INSERT INTO kick_clips (id, campaign, streamer, video_url, fetched_at, state, score, hook,"
+                    " file_path) VALUES (?, ?, 'larry', 'u', 'x', 'ready', ?, ?, ?)",
+                    (f"C{i}", campaign, 10 - i, f"hook {i}", str(media["src8"])))
+    con.commit()
+
+
+def test_hot_plan_posts_now_on_campaign_accounts_only(cfg, con, media):
+    setup_campaign(cfg)
+    cfg["clipping"]["campaigns"].append({**cfg["clipping"]["campaigns"][0], "name": "other"})
+    cfg["clipping"]["accounts"] = [
+        {"nick": "tt1", "platform": "tiktok", "adspower_id": "a1", "campaign": "kick", "daily_limit": 1},
+        {"nick": "x1", "platform": "x", "adspower_id": "a1", "campaign": "kick", "daily_limit": 1},
+        {"nick": "yt9", "platform": "youtube", "adspower_id": "a9", "campaign": "other", "daily_limit": 1}]
+    ready_clips(con, media, 6)
+    now = datetime(2026, 11, 26, 6, 0, tzinfo=timezone.utc)  # night in New York: outside the window
+    got = clipping.plan(cfg, con, False, now, random.Random(1), hot="kick")
+    assert sorted(i["account"] for i in got) == ["tt1", "tt1", "x1", "x1"]  # 2 each, yt9 is another campaign
+    times = sorted({r[0] for r in con.execute("SELECT scheduled_at FROM clip_posts")})
+    assert times == ["2026-11-26T06:00:00Z", "2026-11-26T06:20:00Z"]         # now, then hot_gap_minutes later
+    assert con.execute("SELECT COUNT(DISTINCT clip_id) FROM clip_posts").fetchone()[0] == 4
+
+
+def test_parallel_publish_one_session_per_profile(cfg, con, monkeypatch):
+    from contextlib import contextmanager, nullcontext
+    from clips import instagram, shorts
+    cfg["clipping"]["publish_workers"] = 2
+    cfg["clipping"]["accounts"] = [
+        {"nick": n, "platform": p, "adspower_id": a, "campaign": "kick", "daily_limit": 1}
+        for n, p, a in (("tt1", "tiktok", "A"), ("x1", "x", "A"), ("tt2", "tiktok", "B"), ("x2", "x", "B"))]
+    con.execute("INSERT INTO kick_clips (id, campaign, streamer, video_url, fetched_at, hook) VALUES ('k','kick','l','u','t','h')")
+    for nick, plat in (("tt1", "tiktok"), ("x1", "x"), ("tt2", "tiktok"), ("x2", "x")):
+        con.execute("INSERT INTO clip_posts (clip_id, account, platform, campaign, state, scheduled_at, file_path,"
+                    " caption, created_at) VALUES ('k', ?, ?, 'kick', 'built', '2000-01-01T00:00:00Z', 'f', 'c', 't')",
+                    (nick, plat))
+    con.commit()
+    opened = []
+
+    @contextmanager
+    def session(c, acc):
+        opened.append(acc["adspower_id"])
+        yield f"page-{acc['adspower_id']}"
+
+    monkeypatch.setattr(instagram, "session", session)
+    monkeypatch.setattr(instagram, "browser_lock", lambda c: nullcontext())
+    monkeypatch.setattr(instagram, "pause", lambda c: None)
+    monkeypatch.setattr(shorts, "upload_tiktok", lambda page, c, nick, f, t: f"https://tiktok.com/@{nick}/video/1")
+    monkeypatch.setattr(shorts, "upload_x", lambda page, c, nick, f, t: (_ for _ in ()).throw(RuntimeError("x down"))
+                        if nick == "x2" else f"https://x.com/{nick}/status/1")
+    monkeypatch.setattr(telegram, "send", lambda text, **kw: True)
+    out = shorts.run_publish(cfg, con, False)
+    assert sorted(opened) == ["A", "B"]                     # one browser session per profile, both profiles ran
+    assert sorted(out) == ["failed", "published", "published", "published"]
+    st = dict(con.execute("SELECT account, state FROM clip_posts"))
+    assert st == {"tt1": "published", "x1": "published", "tt2": "published", "x2": "failed"}  # x2 did not stop tt2
+
+
+def test_campaign_go_runs_everything_now(cfg, con, media, monkeypatch):
+    from clips import shorts, vod
+    setup_campaign(cfg)
+    cfg["clipping"]["campaigns"][0].update(source="video", subject="S", videos=[])
+    cfg["clipping"]["accounts"] = [{"nick": "tt1", "platform": "tiktok", "adspower_id": "a1", "campaign": "kick",
+                                    "daily_limit": 1}]
+    seen = {}
+
+    def fake_process(c, con_, dry, only=None):
+        seen["videos"], seen["only"] = list(kick.campaign(c, "kick")["videos"]), only
+        con_.execute("INSERT INTO kick_clips (id, campaign, streamer, title, video_url, fetched_at, state, score, hook,"
+                     " file_path) VALUES ('v1', 'kick', 's', 'AI hook', 'u', 't', 'ready', 9, '', ?)", (str(media["src8"]),))
+        con_.commit()
+
+    monkeypatch.setattr(vod, "process", fake_process)
+    monkeypatch.setattr(kick, "download", lambda *a: {})
+    monkeypatch.setattr(shorts, "run_publish", lambda c, con_, dry: ["published"])
+    sent = []
+    monkeypatch.setattr(telegram, "send", lambda text, **kw: sent.append(text) or True)
+    got = clipping.go(cfg, con, "kick", ["new_trailer.mp4"], approve=True)
+    assert seen == {"videos": ["new_trailer.mp4"], "only": "kick"}
+    assert got == {"approved": 1, "planned": 1, "published": 1, "failed": 0}
+    assert con.execute("SELECT hook FROM kick_clips").fetchone()[0] == "AI hook"
+    assert "campaign-go kick" in sent[-1]

@@ -44,20 +44,23 @@ def next_clip(con, camp: str, nick: str):
         "k.score DESC LIMIT 1", (camp, nick)).fetchone()
 
 
-def plan(cfg, con, dry, now=None, rng=None) -> list[dict]:
+def plan(cfg, con, dry, now=None, rng=None, hot=None) -> list[dict]:
+    """Today's slots in the posting window. hot = a campaign name (campaign-go): its accounts get
+    hot_posts_per_account posts right now, hot_gap_minutes apart, outside the window and the daily limit."""
     now, rng = now or datetime.now(timezone.utc), rng or random.Random()
     k = cfg["clipping"]
     tz, out = ZoneInfo(k["timezone"]), []
     lo, hi = planner.day_bounds(now, tz)
-    accs = accounts(cfg)
+    accs = [a for a in accounts(cfg) if not hot or a["campaign"] == hot]
     rng.shuffle(accs)
     for a in accs:
-        existing = [db.parse_iso(r[0]) for r in con.execute(
+        existing = [] if hot else [db.parse_iso(r[0]) for r in con.execute(
             "SELECT scheduled_at FROM clip_posts WHERE account = ? AND state != 'failed' AND scheduled_at >= ? "
             "AND scheduled_at < ?", (a["nick"], lo, hi))]
-        for _ in range(a["daily_limit"] - len(existing)):
+        for n in range(k["hot_posts_per_account"] if hot else a["daily_limit"] - len(existing)):
             clip = next_clip(con, a["campaign"], a["nick"])
-            slot = clip and planner.pick_slot(now, now.astimezone(tz).date(), existing, k, tz, rng)
+            slot = clip and (now + timedelta(minutes=n * k["hot_gap_minutes"]) if hot else
+                             planner.pick_slot(now, now.astimezone(tz).date(), existing, k, tz, rng))
             if not slot:
                 break
             camp = kick.campaign(cfg, a["campaign"])
@@ -100,6 +103,31 @@ def build_planned(cfg, con) -> dict:
                         (state, *fields.values(), p["id"]))
     log.info("clip build: %s", counts)
     return counts
+
+
+def go(cfg, con, name, sources=(), approve=False, dry=False) -> dict:
+    """campaign-go: a campaign just launched -> clips, hooks, posts on all its accounts right now.
+    The budget of a good campaign is gone in a day or two, so nothing here waits for a timer."""
+    from clips import shorts, vod
+    camp = kick.campaign(cfg, name)
+    camp["videos"] = [*camp.get("videos", []), *sources]  # this run only; config.toml is not touched
+    if camp.get("source", "kick") == "video":
+        vod.process(cfg, con, dry, only=name)
+    else:
+        kick.fetch(cfg, con, dry)
+    kick.download(cfg, con, dry)
+    approved = 0
+    if approve and not dry:
+        approved = vod.approve(con, [r[0] for r in con.execute(
+            "SELECT id FROM kick_clips WHERE campaign = ? AND state = 'ready' AND COALESCE(hook, '') = '' "
+            "AND COALESCE(title, '') != ''", (name,))])
+    planned = plan(cfg, con, dry, hot=name)
+    results = shorts.run_publish(cfg, con, dry)
+    summary = {"approved": approved, "planned": len(planned), "published": results.count("published"),
+               "failed": results.count("failed")}
+    telegram.send(f"campaign-go {name}: одобрено {approved}, запланировано {summary['planned']}, "
+                  f"вышло {summary['published']}, ошибок {summary['failed']}", dry=dry)
+    return summary
 
 
 def set_hook(con, clip_id, hook) -> None:

@@ -128,11 +128,11 @@ def cut(src, start, end, out) -> None:
                     str(out)], check=True, capture_output=True, timeout=600)
 
 
-def process(cfg, con, dry) -> dict:
+def process(cfg, con, dry, only=None) -> dict:
     """Every not yet processed video of every `source = "video"` campaign -> cut clips in state selected
     (kick.download then checks speech, topics and duplicates, as for Kick clips)."""
     counts = {}
-    camps = [c for c in cfg["clipping"]["campaigns"] if c.get("source") == "video"]
+    camps = [c for c in cfg["clipping"]["campaigns"] if c.get("source") == "video" and only in (None, c["name"])]
     if camps and not os.environ.get("OPENAI_API_KEY"):  # config.secret would stop the whole kick run
         log.warning("vod: OPENAI_API_KEY is empty, video campaigns skipped")
         return counts
