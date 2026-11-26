@@ -60,6 +60,11 @@ def load(path=None, check_files=True) -> dict:
         a.setdefault("theme", "")
         a["background"] = _abs(a.get("background", ""))
         a["cover"] = _abs(a.get("cover", ""))
+    k = cfg.setdefault("clipping", {})  # clipping.net part (docs/CLIPPING_PLAN.md); absent in old configs
+    k.setdefault("campaigns", [])
+    k.setdefault("accounts", [])
+    if "layout" in k:
+        k["layout"]["bar_logo"] = _abs(k["layout"].get("bar_logo", ""))
     cfg["data"] = Path(_abs(cfg["data_dir"]))
     validate(cfg, check_files)
     for d in DATA_SUBDIRS:
@@ -178,5 +183,17 @@ def validate(cfg: dict, check_files=True) -> None:
             re.compile(pat)
         except re.error as e:
             errors.append(f"filter.blocked_patterns: bad regex {pat!r}: {e}")
+    k = cfg["clipping"]
+    names = [c["name"] for c in k["campaigns"]]
+    for a in k["accounts"]:
+        if a.get("platform") not in ("tiktok", "youtube"):
+            errors.append(f"clipping account {a.get('nick')}: platform must be tiktok or youtube")
+        if a.get("campaign") not in names:
+            errors.append(f"clipping account {a.get('nick')}: campaign {a.get('campaign')!r} not in clipping.campaigns")
+    for pat in k.get("blocked_patterns", []):
+        try:
+            re.compile(pat)
+        except re.error as e:
+            errors.append(f"clipping.blocked_patterns: bad regex {pat!r}: {e}")
     if errors:
         raise SystemExit("config errors:\n- " + "\n- ".join(errors))

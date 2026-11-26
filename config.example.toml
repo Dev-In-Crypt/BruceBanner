@@ -82,8 +82,8 @@ left = 65
 right = 120                             # like / comment / share buttons
 
 [trends]
-source = "graph"                        # graph: free Instagram API (Business Discovery, donors must be
-                                        # professional accounts) | apify: paid scraper
+source = "browser"                      # browser: free, donor pages read by the [scout] AdsPower profile |
+                                        # graph: free Instagram API (needs a Facebook Page) | apify: paid
 # Picked 18.11.2026 from 30 meme pages found by Russian meme hashtags (docs/DONORS.md): typical views 3k-229k
 donors = ["hermesqz", "hu1iganyo", "ramzik.krsk24", "top.leym", "daring_555", "axyennyi_tip", "meme.actually"]
 donors_movies = ["callmeayub_17"]       # Russian film/series cuts (donor_group "movies", addendum 2b)
@@ -172,6 +172,12 @@ base_url = "http://127.0.0.1:50325"
 headless_browser = true
 request_interval_sec = 1.1              # AdsPower limits some endpoints to 1 request/second
 
+[scout]                                 # trends.source = "browser": one logged-in AdsPower profile reads donor pages
+adspower_id = ""                        # better a separate profile, not a posting account; empty = not set up
+pause_sec = [3, 7]                      # wait after each page load / scroll, like a person
+between_donors_sec = [20, 60]
+max_scrolls = 4                         # per donor, until results_per_donor reels or older than fresh_days
+
 [graph]                                 # Instagram Graph API, token INSTAGRAM_GRAPH_TOKEN in .env
 base_url = "https://graph.facebook.com/v24.0"
 
@@ -240,3 +246,57 @@ cover = ""                              # "" = circle: the reel's background alo
                                         # square: Instagram's frame. A path here overrides it for every reel.
 overlay_texts = ["Смотри до конца"]     # optional text plate on the video (Russian, for viewers)
 bind_code = ""                          # code from the Playerok bot: the next reel goes out with it as its caption
+
+# ---------- clipping.net: TikTok + YouTube Shorts, Kick streamer clips (docs/CLIPPING_PLAN.md) ----------
+# Separate from the Instagram/Playerok part above: own accounts, own tables, own commands (kick-*, clip-*).
+[clipping]
+kick_api = "https://kick.com/api/v2"    # public web API, no key
+kick_period = "week"                    # top clips of: day | week | month | all
+clips_per_streamer = 40
+min_views = 2000                        # Kick clip views; low ones are re-checked on the next fetch
+min_duration_sec = 12
+max_duration_sec = 60                   # Kick clips are up to 60 s; Shorts up to 3 min
+max_age_days = 14
+timezone = "America/New_York"           # posting window in the audience's time (US campaigns)
+window_start = "11:00"
+window_end = "23:00"
+min_gap_minutes = 180                   # between posts of one account
+lead_minutes = 15
+between_accounts_sec = [60, 180]        # pause between accounts when publishing
+speech_check = true                     # speech must be in the campaign's language (filter.speech_* settings)
+# TikTok and YouTube cut gambling; clipping.net briefs forbid it too. Kick category slugs:
+blocked_categories = ["slots", "poker", "sports-betting"]
+# Python regexes on the clip title and the transcript, lowercased. Starter list: tune it.
+blocked_patterns = [
+  '\bcasino', '\bslots?\b', '\bstake\.com', '\bgambl', '\broulette', '\bblackjack', '\bbet(s|ting)?\b', '\bjackpot',
+  '\bcocaine', '\bheroin', '\bmeth\b', '\bweed\b', '\bfentanyl', '\bshooting', '\bstabb', '\bsuicid', '\bkill (my|him|her|your)self',
+  '\bn[i1]gg', '\bf[a@]gg?ot', '\bretard', '\bporn', '\bnudes?\b', '\bonlyfans',
+  '\btrump\b', '\bbiden\b', '\belection', '\bisrael', '\bpalestin', '\bgaza\b',
+]
+
+[clipping.layout]                       # 1080x1920, like the reference clips: hook, video, brand bar
+background = "blur"                     # blur: the same video blurred behind | black
+video_w = 1080
+video_h = 1080                          # the stream (16:9) is cropped to this box, centered
+video_y = 560
+hook_y = 300                            # top edge of the hook block (white plate, black text)
+hook_size = 62
+hook_max_lines = 3
+bar_h = 110                             # brand bar right under the video: KICK logo + KICK.COM/<STREAMER>
+bar_logo = "assets/kick/logo.png"       # from the campaign Assets; missing: the word KICK in Kick green
+font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+[[clipping.campaigns]]
+name = "kick"                           # your label for a clipping.net campaign
+streamers = []                          # Kick channel slugs from the bounty briefs, e.g. "larrywheels"
+language = "en"                         # speech language of the campaign (whisper code: en, es, ...)
+caption = "{hook}"                      # post caption; {hook}, {streamer}
+caption_tags = []                       # required items from the brief, e.g. "#kick"; added to every caption
+post_window_hours = 72                  # submit the link to clipping.net within this time
+
+[[clipping.accounts]]
+nick = "example_tiktok"
+platform = "tiktok"                     # tiktok | youtube
+adspower_id = ""                        # US/UK proxy: English campaigns need 50%+ English-speaking audience
+campaign = "kick"
+daily_limit = 1

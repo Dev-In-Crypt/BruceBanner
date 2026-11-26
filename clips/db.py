@@ -110,6 +110,49 @@ CREATE TABLE IF NOT EXISTS author_limit (       -- Playerok author limit, one fo
   alerted_at  TEXT                               -- "ask for a higher limit" sent for this entry
 );
 
+CREATE TABLE IF NOT EXISTS kick_clips (       -- clipping.net (docs/CLIPPING_PLAN.md): Kick clips of campaign streamers
+  id          TEXT PRIMARY KEY,                  -- Kick clip id, or "file:<name>" / "url:<hash>" for add-clip
+  campaign    TEXT NOT NULL,                     -- clipping.campaigns[].name
+  streamer    TEXT NOT NULL,                     -- Kick channel slug (the KICK.COM/<STREAMER> bar)
+  title       TEXT,
+  category    TEXT,                              -- Kick category slug
+  views       INTEGER,
+  duration    REAL,
+  created_at  TEXT,
+  video_url   TEXT NOT NULL,                     -- HLS playlist, a page for yt-dlp, or a local file
+  fetched_at  TEXT NOT NULL,
+  state       TEXT NOT NULL DEFAULT 'selected'
+              CHECK (state IN ('selected','rejected','ready','duplicate','failed')),
+  reason      TEXT,
+  score       REAL,
+  hook        TEXT,                              -- text above the video; '' = none
+  file_path   TEXT,
+  phash       TEXT
+);
+CREATE INDEX IF NOT EXISTS kick_clips_state ON kick_clips(state, campaign);
+
+CREATE TABLE IF NOT EXISTS clip_posts (         -- one Kick clip on one TikTok / YouTube account
+  id           INTEGER PRIMARY KEY,
+  clip_id      TEXT NOT NULL REFERENCES kick_clips(id),
+  account      TEXT NOT NULL,                    -- clipping.accounts[].nick
+  platform     TEXT NOT NULL CHECK (platform IN ('tiktok','youtube')),
+  campaign     TEXT NOT NULL,
+  state        TEXT NOT NULL DEFAULT 'planned' CHECK (state IN ('planned','built','published','failed')),
+  scheduled_at TEXT NOT NULL,
+  file_path    TEXT,
+  caption      TEXT,
+  post_url     TEXT UNIQUE,
+  published_at TEXT,
+  error        TEXT,
+  last_views   INTEGER,
+  views_at     TEXT,
+  notified_at  TEXT,                             -- link sent to the operator for clipping.net
+  submitted_at TEXT,
+  created_at   TEXT NOT NULL,
+  UNIQUE (clip_id, account)                      -- rule: one clip once per account
+);
+CREATE INDEX IF NOT EXISTS clip_posts_account ON clip_posts(account, scheduled_at);
+
 CREATE TABLE IF NOT EXISTS comment_actions (    -- comment moderation log (addendum 3)
   id             INTEGER PRIMARY KEY,
   publication_id INTEGER NOT NULL REFERENCES publications(id),

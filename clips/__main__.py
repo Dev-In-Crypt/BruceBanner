@@ -64,6 +64,22 @@ def parser() -> argparse.ArgumentParser:
     sb.add_argument("--account", required=True)
     sb.add_argument("--force", action="store_true")
     sub.add_parser("plan", parents=[common], help="plan today's slots, build and validate them")
+    # clipping.net: TikTok + YouTube Shorts with Kick streamer clips (docs/CLIPPING_PLAN.md)
+    sub.add_parser("kick", parents=[common], help="clipping: Kick clips of campaign streamers -> download + checks")
+    ac = sub.add_parser("add-clip", parents=[common], help="clipping: add a clip by hand (file or link)")
+    ac.add_argument("source")
+    ac.add_argument("--campaign", required=True)
+    ac.add_argument("--streamer", required=True, help="Kick channel slug for the KICK.COM/<STREAMER> bar")
+    ac.add_argument("--hook", default="")
+    ch = sub.add_parser("clip-hook", parents=[common], help="clipping: set the hook text of a clip")
+    ch.add_argument("clip_id")
+    ch.add_argument("hook")
+    cp = sub.add_parser("clip-preview", parents=[common], help="clipping: build one clip to a file to look at")
+    cp.add_argument("clip_id")
+    cp.add_argument("--out", required=True)
+    sub.add_parser("clip-plan", parents=[common], help="clipping: plan today's posts and build them")
+    sub.add_parser("clip-publish", parents=[common], help="clipping: post due videos, send links to submit")
+    sub.add_parser("clip-stats", parents=[common], help="clipping: views of our posts, alert on deleted ones")
     sub.add_parser("publish", parents=[common], help="publish due built publications")
     st = sub.add_parser("stats", parents=[common], help="collect views, decide what to submit, notify")
     st.add_argument("--from-file", help="use a saved Apify JSON dump instead of calling Apify")
@@ -84,6 +100,29 @@ def account_cfg(cfg, nick) -> dict:
         if a["nick"] == nick:
             return a
     raise SystemExit(f"account {nick!r} not in config")
+
+
+def run_clipping(args, cfg, con) -> None:
+    from clips import clipping, kick, shorts, video
+    dry = args.dry_run
+    if args.command == "kick":
+        kick.fetch(cfg, con, dry)
+        kick.download(cfg, con, dry)
+    elif args.command == "add-clip":
+        print(kick.add(cfg, con, args.source, args.campaign, args.streamer, args.hook))
+    elif args.command == "clip-hook":
+        clipping.set_hook(con, args.clip_id, args.hook)
+    elif args.command == "clip-preview":
+        c = con.execute("SELECT * FROM kick_clips WHERE id = ? AND state = 'ready'", (args.clip_id,)).fetchone()
+        if not c:
+            raise SystemExit(f"no ready clip {args.clip_id!r} (run kick first)")
+        print(json.dumps(video.build_clip(c["file_path"], c["hook"], c["streamer"], cfg, args.out, seed=c["id"])))
+    elif args.command == "clip-plan":
+        clipping.plan(cfg, con, dry)
+    elif args.command == "clip-publish":
+        shorts.run_publish(cfg, con, dry)
+    elif args.command == "clip-stats":
+        clipping.stats(cfg, con, dry)
 
 
 def run_command(args, cfg, con) -> int:
@@ -145,6 +184,8 @@ def run_command(args, cfg, con) -> int:
         instagram.run_set_bio(cfg, con, account_cfg(cfg, args.account), args.force, dry)
     elif args.command == "plan":
         planner.plan(cfg, con, dry)
+    elif args.command in ("kick", "add-clip", "clip-hook", "clip-preview", "clip-plan", "clip-publish", "clip-stats"):
+        run_clipping(args, cfg, con)
     elif args.command == "publish":
         instagram.run_publish(cfg, con, dry)
     elif args.command == "stats":

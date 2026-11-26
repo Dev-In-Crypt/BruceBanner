@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from clips import config, db, graph, video
+from clips import config, db, graph, scout, video
 
 log = logging.getLogger(__name__)
 API = "https://api.apify.com/v2"
@@ -37,9 +37,12 @@ def run_actor(cfg, run_input: dict) -> list[dict]:
 
 
 def reels(cfg, usernames, limit, days=None, pinned=False, apify_extra=None) -> list[dict]:
-    """Latest reels of these accounts in Apify's item format, from trends.source: "graph" (free Instagram API,
-    professional accounts only, no duration) or "apify" (paid)."""
-    if cfg["trends"].get("source", "apify") == "graph":
+    """Latest reels of these accounts in Apify's item format, from trends.source: "browser" (free, the AdsPower
+    scout profile), "graph" (free Instagram API, professional accounts only, no duration) or "apify" (paid)."""
+    source = cfg["trends"].get("source", "apify")
+    if source == "browser":
+        return scout.reels(cfg, usernames, limit, days)
+    if source == "graph":
         return graph.reels(cfg, usernames, limit, days)
     return run_actor(cfg, {"username": usernames, "resultsLimit": limit, "skipPinnedPosts": not pinned,
                            **({"onlyPostsNewerThan": f"{days} days"} if days else {}), **(apify_extra or {})})

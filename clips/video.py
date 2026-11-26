@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
 log = logging.getLogger(__name__)
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -299,9 +299,9 @@ def insert_midroll(base, t, cfg, out, midroll) -> float:
 
 # ---------- validation (module 8) ----------
 
-def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
-    """Human-readable problems; empty list means the reel may be published (H4)."""
-    c, b = cfg["compose"], cfg["banners"]
+def check_file(path, cfg, expected_duration) -> list[str]:
+    """Format checks every published video passes: size, codecs, 1080x1920, fps, audio, duration."""
+    c = cfg["compose"]
     if not Path(path).is_file():
         return [f"file not found: {path}"]
     p = probe(path)
@@ -325,8 +325,16 @@ def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
         errors.append(f"audio codec {a['codec_name']}, expected aac")
     if abs(p["duration"] - expected_duration) > 0.25:
         errors.append(f"duration {p['duration']:.2f}s, expected {expected_duration:.2f}s")
+    return errors
+
+
+def validate(path, cfg, expected_duration, midroll_window=None) -> list[str]:
+    """Human-readable problems; empty list means the reel may be published (H4)."""
+    c, b = cfg["compose"], cfg["banners"]
+    errors = check_file(path, cfg, expected_duration)
     if errors:
         return errors
+    p = probe(path)
     bw, bh = banner_size(cfg)
     x0 = banner_x(cfg, bw)
     band = (x0, b["top_y"], x0 + bw, b["top_y"] + bh)
@@ -430,3 +438,100 @@ def video_hashes(path, n) -> list[int]:
 
 def hash_distance(a: list[int], b: list[int]) -> float:
     return sum((x ^ y).bit_count() for x, y in zip(a, b)) / max(len(a), 1)
+
+
+# ---------- clipping.net template: hook, video, brand bar (docs/CLIPPING_PLAN.md) ----------
+
+KICK_GREEN = "#53FC18"
+
+
+def font(path, size) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype(path, size)
+    except OSError:  # font missing (e.g. a Windows dev box): Pillow's own scalable font
+        return ImageFont.load_default(size)
+
+
+def wrap(draw, text, f, width) -> list[str]:
+    """Greedy wrap, then narrowed while the line count stays the same: balanced lines, no lone last word."""
+    def greedy(wd):
+        lines = [""]
+        for w in text.split():
+            t = f"{lines[-1]} {w}".strip()
+            if not lines[-1] or draw.textlength(t, font=f) <= wd:
+                lines[-1] = t
+            else:
+                lines.append(w)
+        return [x for x in lines if x]
+    best = greedy(width)
+    while width > 100 and len(narrower := greedy(width - 20)) == len(best):
+        best, width = narrower, width - 20
+    return best
+
+
+def clip_overlay_png(cfg, hook, streamer, out) -> None:
+    """Transparent 1080x1920 layer: the hook on white plates above the video, the brand bar right under it."""
+    L, c = cfg["clipping"]["layout"], cfg["compose"]
+    W, H = c["width"], c["height"]
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    if hook:
+        f, lh = font(L["font_file"], L["hook_size"]), round(L["hook_size"] * 1.25)
+        lines = wrap(d, hook, f, W - 160)[: L["hook_max_lines"]]
+        y0 = L["video_y"] - 30 - lh * len(lines)  # the block ends just above the video
+        for i, line in enumerate(lines):
+            tw, y = d.textlength(line, font=f), y0 + i * lh
+            d.rounded_rectangle([(W - tw) / 2 - 26, y - 6, (W + tw) / 2 + 26, y + lh + 6], radius=20, fill="white")
+        for i, line in enumerate(lines):
+            d.text((W / 2, y0 + i * lh + lh / 2), line, font=f, fill="black", anchor="mm")
+    by, bh = L["video_y"] + L["video_h"], L["bar_h"]
+    d.rectangle([0, by, W, by + bh], fill="black")
+    if Path(L["bar_logo"]).is_file():
+        logo = Image.open(L["bar_logo"]).convert("RGBA")
+        logo = logo.resize((round(logo.width * bh * 0.72 / logo.height), round(bh * 0.72)), Image.LANCZOS)
+        img.alpha_composite(logo, (34, by + round(bh * 0.14)))
+    else:
+        d.text((34, by + bh / 2), "KICK", font=font(L["font_file"], round(bh * 0.72)), fill=KICK_GREEN, anchor="lm")
+    d.text((W - 34, by + bh / 2), f"KICK.COM/{streamer.upper()}", font=font(L["font_file"], round(bh * 0.36)),
+           fill="white", anchor="rm")
+    img.save(out)
+
+
+def build_clip(src, hook, streamer, cfg, out, seed="") -> dict:
+    """One clipping.net video: blurred (or black) background, the stream cropped into the video box with a small
+    per-post variation (zoom, position, color), the overlay on top. Validated; a bad file never replaces `out`."""
+    L, c = cfg["clipping"]["layout"], cfg["compose"]
+    W, H, fps = c["width"], c["height"], c["fps"]
+    VW, VH, VY = L["video_w"], L["video_h"], L["video_y"]
+    info = probe(src)
+    if not info["video"]:
+        raise ValueError(f"no video stream in {src}")
+    dur = info["duration"]
+    r = random.Random(seed)
+    z, fx, fy = r.uniform(1.0, 1.08), r.uniform(0.42, 0.58), r.uniform(0.42, 0.58)
+    sat, con = r.uniform(0.96, 1.08), r.uniform(0.98, 1.05)
+    out = Path(out)
+    part = out.with_name(out.name + ".part.mp4")
+    with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
+        overlay = Path(tmp) / "overlay.png"
+        clip_overlay_png(cfg, hook, streamer, overlay)
+        args = ["ffmpeg", "-v", "error", "-y", "-i", src, "-loop", "1", "-framerate", fps, "-i", overlay]
+        audio = "[0:a]"
+        if info["audio"] is None:
+            args += ["-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo"]
+            audio = "[2:a]"
+        bg = (f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},gblur=sigma=28,"
+              f"eq=brightness=-0.12[bg]" if L["background"] == "blur" else f"[a]scale={W}:{H},drawbox=c=black:t=fill[bg]")
+        graph = (f"[0:v]fps={fps},setsar=1,split[a][b];{bg};"
+                 f"[b]scale={round(VW * z)}:{round(VH * z)}:force_original_aspect_ratio=increase,"
+                 f"crop={VW}:{VH}:(iw-{VW})*{fx:.3f}:(ih-{VH})*{fy:.3f},eq=saturation={sat:.3f}:contrast={con:.3f}[fg];"
+                 f"[bg][fg]overlay={(W - VW) // 2}:{VY}[m];[m][1:v]overlay=0:0:shortest=1,format=yuv420p[v];"
+                 f"{audio}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad[o]")
+        run(args + ["-filter_complex", graph, "-map", "[v]", "-map", "[o]", "-t", dur,
+                    *_encode_args(cfg, c["crf"], c["preset"]), part])
+    problems = check_file(part, cfg, dur)
+    if problems:
+        part.unlink(missing_ok=True)
+        raise ValueError("; ".join(problems))
+    os.replace(part, out)
+    return {"duration": round(dur, 3), "hook": hook, "streamer": streamer}
