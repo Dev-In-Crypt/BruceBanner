@@ -1,0 +1,10 @@
+[Unit]
+Description=clips clip-plan (clipping: plan and build, hourly)
+
+[Timer]
+OnCalendar=*-*-* *:25:00
+Persistent=true
+Unit=clips@clip-plan.service
+
+[Install]
+WantedBy=timers.target

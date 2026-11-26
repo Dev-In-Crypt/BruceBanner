@@ -1,0 +1,10 @@
+[Unit]
+Description=clips kick (clipping: Kick clips, every 3 hours)
+
+[Timer]
+OnCalendar=*-*-* 01/3:35:00
+Persistent=true
+Unit=clips@kick.service
+
+[Install]
+WantedBy=timers.target

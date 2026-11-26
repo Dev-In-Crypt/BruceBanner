@@ -67,6 +67,45 @@ sudo -u clips /opt/clips/.venv/bin/python -m clips <команда> [--dry-run]
 
 Окно публикаций (10:00-22:00) и лимиты задаются в `config.toml`, а не здесь.
 
+## 0а. Clipping: clipping.net, TikTok и YouTube Shorts (с 26.11.2026 основной режим)
+
+План и правила площадки: `docs/CLIPPING_PLAN.md`. Установка сервера та же (раздел 0, шаги 1 и 3), отличия:
+
+1. `.env`: `ADSPOWER_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OPERATOR_IDS` (туда приходят ссылки для сабмита
+   и тревоги). Instagram-ключи не нужны.
+2. `config.toml`, раздел `[clipping]`:
+   - `[[clipping.campaigns]]`: стримеры Kick из брифа, язык, обязательные теги (`caption_tags`), окно сабмита;
+   - `[[clipping.accounts]]`: каждый TikTok/YouTube: `nick`, `platform`, `adspower_id`, `campaign`, `daily_limit`.
+   Профили AdsPower этих аккаунтов: прокси США/Великобритании, вход в TikTok/YouTube выполнен, аккаунт
+   подтверждён в clipping.net кодом в описании.
+3. Логотип Kick из Assets кампании: `assets/kick/logo.png` (без него пишется слово KICK зелёным).
+4. Автозапуск (вместо списка таймеров из раздела 0, шаг 4: Instagram-таймеры не включать):
+   ```bash
+   sudo cp deploy/systemd/* /etc/systemd/system/
+   sudo mkdir -p /etc/systemd/journald.conf.d && sudo cp deploy/journald.conf.d/clips.conf /etc/systemd/journald.conf.d/
+   sudo systemctl restart systemd-journald && sudo systemctl daemon-reload
+   sudo systemctl enable --now adspower
+   sudo systemctl enable --now clips-kick.timer clips-clip-plan.timer clips-clip-publish.timer clips-clip-stats.timer      clips-maintenance.timer
+   ```
+   Проверка: `systemctl list-timers 'clips-*'` показывает 5 таймеров.
+
+| Что | Когда |
+|-----|-------|
+| `kick`: клипы стримеров, отбор, скачивание, проверки | каждые 3 часа |
+| `clip-plan`: план на сегодня (окно по Нью-Йорку) и сборка | каждый час |
+| `clip-publish`: публикация, ссылки для сабмита в Telegram | каждые 10 минут |
+| `clip-stats`: просмотры, тревога об удалённых постах | 08:00 по Нью-Йорку |
+| Обслуживание и бэкап | 04:30 |
+
+Первые живые проверки (по порядку):
+1. `python -m clips kick`: в логе `kick fetch` и `kick download` с числом `ready`.
+2. `sqlite3 data/clips.db "SELECT id, views, hook FROM kick_clips WHERE state='ready'"`: клипы без хука
+   получить хук: `python -m clips clip-hook <id> "текст"`.
+3. `python -m clips clip-preview <id> --out data/tmp/p.mp4`: посмотреть на телефоне.
+4. `python -m clips clip-plan`, затем `python -m clips clip-publish` на одном аккаунте: пост в TikTok/YouTube,
+   в Telegram ссылка. Если шаг загрузки падает, скриншот в `data/screenshots/`, селекторы в `clips/shorts.py`.
+5. Ссылку вставить в clipping.net (Submit в баунти) до конца окна сабмита.
+
 ## 1. Первые живые проверки (по порядку, до пилота)
 
 1. `python -m clips build --source мем.mp4 --account <ник> --out data/tmp/t.mp4`: посмотреть ролик на телефоне

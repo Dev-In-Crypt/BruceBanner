@@ -1,0 +1,10 @@
+[Unit]
+Description=clips clip-stats (clipping: views of our posts, daily)
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 America/New_York
+Persistent=true
+Unit=clips@clip-stats.service
+
+[Install]
+WantedBy=timers.target

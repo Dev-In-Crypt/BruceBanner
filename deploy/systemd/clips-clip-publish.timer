@@ -1,0 +1,9 @@
+[Unit]
+Description=clips clip-publish (clipping: publish due posts, every 10 minutes)
+
+[Timer]
+OnCalendar=*:05/10
+Unit=clips@clip-publish.service
+
+[Install]
+WantedBy=timers.target
