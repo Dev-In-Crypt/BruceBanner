@@ -185,6 +185,11 @@ def validate(cfg: dict, check_files=True) -> None:
             errors.append(f"filter.blocked_patterns: bad regex {pat!r}: {e}")
     k = cfg["clipping"]
     names = [c["name"] for c in k["campaigns"]]
+    for c in k["campaigns"]:
+        if c.get("source", "kick") not in ("kick", "video") or c.get("bar", "kick") not in ("kick", "none"):
+            errors.append(f"campaign {c['name']}: source must be kick|video, bar kick|none")
+        if c.get("source") == "video" and not c.get("subject"):
+            errors.append(f"campaign {c['name']}: a video campaign needs subject (who the clips are about)")
     for a in k["accounts"]:
         if a.get("platform") not in ("tiktok", "youtube"):
             errors.append(f"clipping account {a.get('nick')}: platform must be tiktok or youtube")

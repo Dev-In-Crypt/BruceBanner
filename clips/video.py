@@ -469,8 +469,9 @@ def wrap(draw, text, f, width) -> list[str]:
     return best
 
 
-def clip_overlay_png(cfg, hook, streamer, out) -> None:
-    """Transparent 1080x1920 layer: the hook on white plates above the video, the brand bar right under it."""
+def clip_overlay_png(cfg, hook, streamer, out, bar="kick") -> None:
+    """Transparent 1080x1920 layer: the hook on white plates above the video, the brand bar right under it
+    (bar = "none": no bar; briefs that ban extra logos)."""
     L, c = cfg["clipping"]["layout"], cfg["compose"]
     W, H = c["width"], c["height"]
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -484,6 +485,9 @@ def clip_overlay_png(cfg, hook, streamer, out) -> None:
             d.rounded_rectangle([(W - tw) / 2 - 26, y - 6, (W + tw) / 2 + 26, y + lh + 6], radius=20, fill="white")
         for i, line in enumerate(lines):
             d.text((W / 2, y0 + i * lh + lh / 2), line, font=f, fill="black", anchor="mm")
+    if bar == "none":
+        img.save(out)
+        return
     by, bh = L["video_y"] + L["video_h"], L["bar_h"]
     d.rectangle([0, by, W, by + bh], fill="black")
     if Path(L["bar_logo"]).is_file():
@@ -497,7 +501,7 @@ def clip_overlay_png(cfg, hook, streamer, out) -> None:
     img.save(out)
 
 
-def build_clip(src, hook, streamer, cfg, out, seed="") -> dict:
+def build_clip(src, hook, streamer, cfg, out, seed="", bar="kick") -> dict:
     """One clipping.net video: blurred (or black) background, the stream cropped into the video box with a small
     per-post variation (zoom, position, color), the overlay on top. Validated; a bad file never replaces `out`."""
     L, c = cfg["clipping"]["layout"], cfg["compose"]
@@ -514,7 +518,7 @@ def build_clip(src, hook, streamer, cfg, out, seed="") -> dict:
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
         overlay = Path(tmp) / "overlay.png"
-        clip_overlay_png(cfg, hook, streamer, overlay)
+        clip_overlay_png(cfg, hook, streamer, overlay, bar)
         args = ["ffmpeg", "-v", "error", "-y", "-i", src, "-loop", "1", "-framerate", fps, "-i", overlay]
         audio = "[0:a]"
         if info["audio"] is None:

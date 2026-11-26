@@ -73,8 +73,8 @@ def decide(c: dict, cfg, now) -> tuple[str, str | None]:
 
 def fetch(cfg, con, dry, now=None) -> dict:
     now, counts = now or datetime.now(timezone.utc), {}
-    for camp in cfg["clipping"]["campaigns"]:
-        for slug in camp["streamers"]:
+    for camp in [c for c in cfg["clipping"]["campaigns"] if c.get("source", "kick") == "kick"]:
+        for slug in camp.get("streamers", []):
             try:
                 clips = streamer_clips(cfg, slug)[: cfg["clipping"]["clips_per_streamer"]]
             except Exception as e:  # noqa: BLE001

@@ -65,7 +65,9 @@ def parser() -> argparse.ArgumentParser:
     sb.add_argument("--force", action="store_true")
     sub.add_parser("plan", parents=[common], help="plan today's slots, build and validate them")
     # clipping.net: TikTok + YouTube Shorts with Kick streamer clips (docs/CLIPPING_PLAN.md)
-    sub.add_parser("kick", parents=[common], help="clipping: Kick clips of campaign streamers -> download + checks")
+    sub.add_parser("kick", parents=[common], help="clipping: Kick clips + cut campaign videos (Claude) -> download + checks")
+    ca = sub.add_parser("clip-approve", parents=[common], help="clipping: approve the AI hooks of cut clips")
+    ca.add_argument("clip_ids", nargs="+")
     ac = sub.add_parser("add-clip", parents=[common], help="clipping: add a clip by hand (file or link)")
     ac.add_argument("source")
     ac.add_argument("--campaign", required=True)
@@ -103,11 +105,14 @@ def account_cfg(cfg, nick) -> dict:
 
 
 def run_clipping(args, cfg, con) -> None:
-    from clips import clipping, kick, shorts, video
+    from clips import clipping, kick, shorts, video, vod
     dry = args.dry_run
     if args.command == "kick":
         kick.fetch(cfg, con, dry)
+        vod.process(cfg, con, dry)
         kick.download(cfg, con, dry)
+    elif args.command == "clip-approve":
+        print(f"approved: {vod.approve(con, args.clip_ids)}")
     elif args.command == "add-clip":
         print(kick.add(cfg, con, args.source, args.campaign, args.streamer, args.hook))
     elif args.command == "clip-hook":
@@ -116,7 +121,9 @@ def run_clipping(args, cfg, con) -> None:
         c = con.execute("SELECT * FROM kick_clips WHERE id = ? AND state = 'ready'", (args.clip_id,)).fetchone()
         if not c:
             raise SystemExit(f"no ready clip {args.clip_id!r} (run kick first)")
-        print(json.dumps(video.build_clip(c["file_path"], c["hook"], c["streamer"], cfg, args.out, seed=c["id"])))
+        bar = kick.campaign(cfg, c["campaign"]).get("bar", "kick")
+        print(json.dumps(video.build_clip(c["file_path"], c["hook"] or c["title"] or "", c["streamer"], cfg, args.out,
+                                          seed=c["id"], bar=bar)))
     elif args.command == "clip-plan":
         clipping.plan(cfg, con, dry)
     elif args.command == "clip-publish":
@@ -184,7 +191,7 @@ def run_command(args, cfg, con) -> int:
         instagram.run_set_bio(cfg, con, account_cfg(cfg, args.account), args.force, dry)
     elif args.command == "plan":
         planner.plan(cfg, con, dry)
-    elif args.command in ("kick", "add-clip", "clip-hook", "clip-preview", "clip-plan", "clip-publish", "clip-stats"):
+    elif args.command in ("kick", "clip-approve", "add-clip", "clip-hook", "clip-preview", "clip-plan", "clip-publish", "clip-stats"):
         run_clipping(args, cfg, con)
     elif args.command == "publish":
         instagram.run_publish(cfg, con, dry)

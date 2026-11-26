@@ -268,8 +268,8 @@ speech_check = true                     # speech must be in the campaign's langu
 blocked_categories = ["slots", "poker", "sports-betting"]
 # Python regexes on the clip title and the transcript, lowercased. Starter list: tune it.
 blocked_patterns = [
-  '\bcasino', '\bslots?\b', '\bstake\.com', '\bgambl', '\broulette', '\bblackjack', '\bbet(s|ting)?\b', '\bjackpot',
-  '\bcocaine', '\bheroin', '\bmeth\b', '\bweed\b', '\bfentanyl', '\bshooting', '\bstabb', '\bsuicid', '\bkill (my|him|her|your)self',
+  '\bcasino', '\bslots?\b', '\bstake\.com', '\bgambl', '\broulette', '\bblackjack', '\bbetting\b', '\bjackpot',
+  '\bcocaine', '\bheroin', '\bmeth\b', '\bweed\b', '\bfentanyl', '\bstabb', '\bsuicid', '\bkill (my|him|her|your)self',
   '\bn[i1]gg', '\bf[a@]gg?ot', '\bretard', '\bporn', '\bnudes?\b', '\bonlyfans',
   '\btrump\b', '\bbiden\b', '\belection', '\bisrael', '\bpalestin', '\bgaza\b',
 ]
@@ -286,13 +286,33 @@ bar_h = 110                             # brand bar right under the video: KICK 
 bar_logo = "assets/kick/logo.png"       # from the campaign Assets; missing: the word KICK in Kick green
 font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
+[clipping.vod]                          # campaigns with source = "video": Claude picks moments of a long video
+model = "claude-opus-5-5"               # key ANTHROPIC_API_KEY in .env; a few cents per video
+moments = 10
+min_sec = 20
+max_sec = 60
+
 [[clipping.campaigns]]
 name = "kick"                           # your label for a clipping.net campaign
+source = "kick"                         # kick: top Kick clips of the streamers | video: cut the brief's videos
+bar = "kick"                            # kick: KICK logo + KICK.COM/<STREAMER> under the video | none
 streamers = []                          # Kick channel slugs from the bounty briefs, e.g. "larrywheels"
 language = "en"                         # speech language of the campaign (whisper code: en, es, ...)
 caption = "{hook}"                      # post caption; {hook}, {streamer}
 caption_tags = []                       # required items from the brief, e.g. "#kick"; added to every caption
 post_window_hours = 72                  # submit the link to clipping.net within this time
+
+[[clipping.campaigns]]
+name = "ako"                            # AKO x Clipping: $200 / 100K, 50K views to qualify (brief 24.11.2026)
+source = "video"
+videos = ["https://www.youtube.com/watch?v=EuWoB_LRtW0"]   # the brief's Content links
+subject = "AKO"                         # focus of every clip; every hook names it (brief rule)
+language = "en"
+bar = "none"                            # brief: no logos of any kind
+review = true                           # AI hooks wait for clip-approve
+caption = "{hook}"
+caption_tags = []
+post_window_hours = 72
 
 [[clipping.accounts]]
 nick = "example_tiktok"
