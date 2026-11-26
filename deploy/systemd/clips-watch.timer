@@ -1,0 +1,9 @@
+[Unit]
+Description=clips watch-campaigns (new promote.fun campaigns, every 15 minutes)
+
+[Timer]
+OnCalendar=*:0/15
+Unit=clips@watch-campaigns.service
+
+[Install]
+WantedBy=timers.target

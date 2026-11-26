@@ -153,6 +153,15 @@ CREATE TABLE IF NOT EXISTS clip_posts (         -- one Kick clip on one TikTok /
 );
 CREATE INDEX IF NOT EXISTS clip_posts_account ON clip_posts(account, scheduled_at);
 
+CREATE TABLE IF NOT EXISTS watched_campaigns (  -- campaign watcher (clips/watch.py): what was already announced
+  site     TEXT NOT NULL,                       -- 'promote.fun'
+  id       TEXT NOT NULL,
+  slug     TEXT,
+  title    TEXT,
+  seen_at  TEXT NOT NULL,
+  PRIMARY KEY (site, id)
+);
+
 CREATE TABLE IF NOT EXISTS comment_actions (    -- comment moderation log (addendum 3)
   id             INTEGER PRIMARY KEY,
   publication_id INTEGER NOT NULL REFERENCES publications(id),
