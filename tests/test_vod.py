@@ -72,9 +72,28 @@ def test_process_cuts_waits_for_review_then_plans(cfg, con, media, monkeypatch):
 
 def test_no_bar_campaign(cfg, media, tmp_path):
     out = tmp_path / "n.mp4"
-    meta = video.build_clip(media["src15_noaudio"], "AKO shows his watch", "ako", cfg, out, "s", bar="none")
+    meta = video.build_clip(media["src15_noaudio"], "AKO shows his watch", "ako", cfg, out, "s", camp={"bar": "none"})
     assert video.check_file(out, cfg, meta["duration"]) == []
     L = cfg["clipping"]["layout"]
     y = L["video_y"] + L["video_h"] + L["bar_h"] // 2
     strip = video.grab_frame(out, 1.0).crop((600, y - 10, 1050, y + 10)).convert("L")
     assert max(strip.getextrema()) < 200  # no white KICK.COM text where the bar would be
+
+
+def test_campaign_layout_keeps_whole_frame(cfg, media, tmp_path):
+    camp = {"bar": "none", "layout": {"video_h": 608, "video_y": 640}}
+    assert video.clip_layout(cfg, camp)["video_h"] == 608 and video.clip_layout(cfg)["video_h"] == 1080
+    out = tmp_path / "w.mp4"
+    video.build_clip(media["src25"], "AKO wide shot", "ako", cfg, out, "s", camp=camp)
+    assert video.check_file(out, cfg, video.probe(media["src25"])["duration"]) == []
+
+
+def test_local_file_campaign_without_subject_in_hook(cfg, media, monkeypatch):
+    path, info = vod.download(cfg, str(media["src25"]), cfg["data"] / "sources")
+    assert path == media["src25"] and info["title"] == "src25" and vod.video_id(str(media["src25"])) == "src25"
+    c = {**camp(cfg), "subject": "Club Cumming", "hook_names_subject": False, "about": "A nightclub TV show."}
+    calls = fake_llm(monkeypatch, [{"start": 10, "end": 40, "hook": "Nobody expected this vacuum pitch", "why": "w",
+                                    "score": 8}])
+    got = vod.pick_moments(cfg, c, "Episode 5", [], [(0.0, 50.0, "talk")])
+    assert [m["hook"] for m in got] == ["Nobody expected this vacuum pitch"]  # no subject needed in the hook
+    assert "A nightclub TV show." in calls[0]["input"] and "names Club Cumming" not in calls[0]["input"]

@@ -82,6 +82,7 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("clip-plan", parents=[common], help="clipping: plan today's posts and build them")
     sub.add_parser("clip-publish", parents=[common], help="clipping: post due videos, send links to submit")
     sub.add_parser("clip-stats", parents=[common], help="clipping: views of our posts, alert on deleted ones")
+    sub.add_parser("watch-campaigns", parents=[common], help="new campaigns on promote.fun -> Telegram")
     sub.add_parser("publish", parents=[common], help="publish due built publications")
     st = sub.add_parser("stats", parents=[common], help="collect views, decide what to submit, notify")
     st.add_argument("--from-file", help="use a saved Apify JSON dump instead of calling Apify")
@@ -121,15 +122,17 @@ def run_clipping(args, cfg, con) -> None:
         c = con.execute("SELECT * FROM kick_clips WHERE id = ? AND state = 'ready'", (args.clip_id,)).fetchone()
         if not c:
             raise SystemExit(f"no ready clip {args.clip_id!r} (run kick first)")
-        bar = kick.campaign(cfg, c["campaign"]).get("bar", "kick")
         print(json.dumps(video.build_clip(c["file_path"], c["hook"] or c["title"] or "", c["streamer"], cfg, args.out,
-                                          seed=c["id"], bar=bar)))
+                                          seed=c["id"], camp=kick.campaign(cfg, c["campaign"]))))
     elif args.command == "clip-plan":
         clipping.plan(cfg, con, dry)
     elif args.command == "clip-publish":
         shorts.run_publish(cfg, con, dry)
     elif args.command == "clip-stats":
         clipping.stats(cfg, con, dry)
+    elif args.command == "watch-campaigns":
+        from clips import watch
+        watch.run(cfg, con, dry)
 
 
 def run_command(args, cfg, con) -> int:
@@ -191,7 +194,8 @@ def run_command(args, cfg, con) -> int:
         instagram.run_set_bio(cfg, con, account_cfg(cfg, args.account), args.force, dry)
     elif args.command == "plan":
         planner.plan(cfg, con, dry)
-    elif args.command in ("kick", "clip-approve", "add-clip", "clip-hook", "clip-preview", "clip-plan", "clip-publish", "clip-stats"):
+    elif args.command in ("kick", "clip-approve", "add-clip", "clip-hook", "clip-preview", "clip-plan", "clip-publish", "clip-stats",
+                          "watch-campaigns"):
         run_clipping(args, cfg, con)
     elif args.command == "publish":
         instagram.run_publish(cfg, con, dry)

@@ -469,10 +469,10 @@ def wrap(draw, text, f, width) -> list[str]:
     return best
 
 
-def clip_overlay_png(cfg, hook, streamer, out, bar="kick") -> None:
+def clip_overlay_png(cfg, hook, streamer, out, camp=None) -> None:
     """Transparent 1080x1920 layer: the hook on white plates above the video, the brand bar right under it
     (bar = "none": no bar; briefs that ban extra logos)."""
-    L, c = cfg["clipping"]["layout"], cfg["compose"]
+    L, c, bar = clip_layout(cfg, camp), cfg["compose"], (camp or {}).get("bar", "kick")
     W, H = c["width"], c["height"]
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -501,10 +501,16 @@ def clip_overlay_png(cfg, hook, streamer, out, bar="kick") -> None:
     img.save(out)
 
 
-def build_clip(src, hook, streamer, cfg, out, seed="", bar="kick") -> dict:
+def clip_layout(cfg, camp=None) -> dict:
+    """clipping.layout with the campaign's own `layout` table on top (e.g. the whole 16:9 frame for IRL videos,
+    where a square crop can cut the person the brief wants in focus)."""
+    return {**cfg["clipping"]["layout"], **((camp or {}).get("layout") or {})}
+
+
+def build_clip(src, hook, streamer, cfg, out, seed="", camp=None) -> dict:
     """One clipping.net video: blurred (or black) background, the stream cropped into the video box with a small
     per-post variation (zoom, position, color), the overlay on top. Validated; a bad file never replaces `out`."""
-    L, c = cfg["clipping"]["layout"], cfg["compose"]
+    L, c = clip_layout(cfg, camp), cfg["compose"]
     W, H, fps = c["width"], c["height"], c["fps"]
     VW, VH, VY = L["video_w"], L["video_h"], L["video_y"]
     info = probe(src)
@@ -518,7 +524,7 @@ def build_clip(src, hook, streamer, cfg, out, seed="", bar="kick") -> dict:
     part = out.with_name(out.name + ".part.mp4")
     with tempfile.TemporaryDirectory(dir=cfg["data"] / "tmp") as tmp:
         overlay = Path(tmp) / "overlay.png"
-        clip_overlay_png(cfg, hook, streamer, overlay, bar)
+        clip_overlay_png(cfg, hook, streamer, overlay, camp)
         args = ["ffmpeg", "-v", "error", "-y", "-i", src, "-loop", "1", "-framerate", fps, "-i", overlay]
         audio = "[0:a]"
         if info["audio"] is None:

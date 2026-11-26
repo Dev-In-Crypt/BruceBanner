@@ -23,24 +23,35 @@ SCHEMA = {
     "type": "object",
     "properties": {"moments": {"type": "array", "items": {
         "type": "object",
-        "properties": {"start": {"type": "number"}, "end": {"type": "number"},
-                       "hook": {"type": "string"}, "why": {"type": "string"}},
-        "required": ["start", "end", "hook", "why"], "additionalProperties": False}}},
+        "properties": {"start": {"type": "number"}, "end": {"type": "number"}, "hook": {"type": "string"},
+                       "why": {"type": "string"}, "score": {"type": "integer"}},
+        "required": ["start", "end", "hook", "why", "score"], "additionalProperties": False}}},
     "required": ["moments"], "additionalProperties": False,
 }
-PROMPT = """You pick moments from a long video to post as vertical short clips (TikTok, YouTube Shorts) for a paid \
-clipping campaign about {subject}.
+PROMPT = """You are the editor of a viral short-video page. From a long video you pick moments to post as vertical \
+clips (TikTok, YouTube Shorts) for a paid clipping campaign about {subject}. Clips are paid per view, so only \
+moments that make a stranger stop scrolling are worth posting.
 
-Campaign rules: {subject} must be the main focus of every clip (speaking or clearly featured, never in the \
-background); the on-screen text must mention {subject} in a relevant way; posts that add no value \
-("random moment + I CAN'T BELIEVE THAT HAPPENED") are disqualified. No gambling, drugs, politics or violence.
+Campaign brief rules: {rules} Posts that add no value ("random moment + I CAN'T BELIEVE THAT HAPPENED") are \
+disqualified. No gambling, drugs, politics or violence.
+
+About the content: {about}
+
+The best clip is a mini story with a setup, a conflict and a payoff, not an isolated line. What stops the scroll, \
+strongest first: big money and luxury, conflict (an argument, a chase, a refusal, a deal falling apart), the \
+funniest or most outrageous moment, a surprising reveal, a savage or bold line, a celebrity moment. Skip small \
+talk, filler and low-stakes chatter even if it is pleasant.
 
 Pick {n} moments. Each moment:
 - {min_s}-{max_s} seconds, start and end on the transcript timestamps below, self-contained: a viewer with no \
-context understands it, it opens on something that grabs attention and ends on a complete thought or payoff;
-- hook: the on-screen text above the video, at most 70 characters, in {language}, names {subject}, says what is \
-specific and interesting in this moment (a number, a claim, a reaction), no clickbait without substance, no emoji;
-- why: one short sentence on why this moment works.
+context understands it, it opens on the hook moment (no slow lead-in) and ends on the payoff;
+- hook: the on-screen text above the video, in {language}, at most 60 characters{hook_rule}. Write it like the top \
+hooks on TikTok: stakes or curiosity in the first three words, the single most striking true fact of the clip (a \
+dollar amount, the boldest quote, what is at stake), something the viewer wants to see resolved. Never use flat \
+verbs like compares, considers, weighs, explains, discusses, talks about. Only facts that happen in the clip: no \
+invented numbers. No emoji, no dashes, no swearing;
+- why: one short sentence on why a stranger would watch to the end;
+- score: 1-10, how likely this clip gets views (10 = everyone stops scrolling). Be strict.
 Moments must not overlap. Prefer the strongest moments over even coverage of the video.
 
 Video title: {title}
@@ -52,11 +63,14 @@ Transcript ([start-end] seconds):
 
 def video_id(url: str) -> str:
     m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{6,})", url)
-    return m.group(1) if m else re.sub(r"\W", "_", url)[-32:]
+    return m.group(1) if m else re.sub(r"\W", "_", Path(url).stem if Path(url).is_file() else url)[-32:]
 
 
 def download(cfg, url, out_dir: Path) -> tuple[Path, dict]:
-    """Whole video + its metadata. On a datacenter IP YouTube asks to sign in: set download.proxy."""
+    """Whole video + its metadata. On a datacenter IP YouTube asks to sign in: set download.proxy.
+    A local file (a brief's source from MediaSilo, Drive...) is used as it is."""
+    if Path(url).is_file():
+        return Path(url), {"title": Path(url).stem, "chapters": []}
     proxy = cfg["download"]["proxy"]
     base = [sys.executable, "-m", "yt_dlp", "-q", *(["--proxy", proxy] if proxy else [])]
     info = json.loads(subprocess.run(base + ["--skip-download", "--dump-json", url], check=True,
@@ -82,7 +96,10 @@ def pick_moments(cfg, camp, title, chapters, segs) -> list[dict]:
     """The model's moments, checked: length in range, inside the video, hook names the subject, no overlaps."""
     v = cfg["clipping"]["vod"]
     text = "\n".join(f"[{a:.1f}-{b:.1f}] {t}" for a, b, t in segs)
+    named = camp.get("hook_names_subject", True)  # some briefs require the subject in the on-screen text
     prompt = PROMPT.format(subject=camp["subject"], n=v["moments"], min_s=v["min_sec"], max_s=v["max_sec"],
+                           rules=camp.get("rules") or "use only the provided content.", about=camp.get("about", ""),
+                           hook_rule=f", names {camp['subject']}" if named else "",
                            language=camp["language"], title=title, transcript=text,
                            chapters=", ".join(f"{c.get('title')} @{int(c.get('start_time', 0))}s" for c in chapters)
                            or "none")
@@ -96,7 +113,8 @@ def pick_moments(cfg, camp, title, chapters, segs) -> list[dict]:
     end_of_video, out = segs[-1][1] if segs else 0, []
     for m in sorted(moments, key=lambda m: m["start"]):
         ok = (v["min_sec"] - 2 <= m["end"] - m["start"] <= v["max_sec"] + 2 and 0 <= m["start"] < m["end"] <= end_of_video + 1
-              and camp["subject"].lower() in m["hook"].lower() and (not out or m["start"] >= out[-1]["end"]))
+              and (not named or camp["subject"].lower() in m["hook"].lower())
+              and (not out or m["start"] >= out[-1]["end"]))
         if ok:
             out.append({**m, "hook": m["hook"].strip()[:90]})
         else:
@@ -145,8 +163,9 @@ def process(cfg, con, dry) -> dict:
                         "INSERT OR IGNORE INTO kick_clips (id, campaign, streamer, title, duration, video_url, fetched_at,"
                         " state, score, hook) VALUES (?,?,?,?,?,?,?, 'selected', ?, ?)",
                         (cid, camp["name"], camp["subject"].lower(), m["hook"], round(m["end"] - m["start"], 1),
-                         str(out), db.now_iso(), -m["start"], "" if camp.get("review", True) else m["hook"]))
-                lines.append(f"{cid}  {int(m['start']) // 60}:{int(m['start']) % 60:02d}  {m['hook']}")
+                         str(out), db.now_iso(), m.get("score", 0), "" if camp.get("review", True) else m["hook"]))
+                lines.append(f"{m.get('score', 0)}/10  {cid}  {int(m['start']) // 60}:{int(m['start']) % 60:02d}  "
+                             f"{m['hook']}")
             counts["cut"] = counts.get("cut", 0) + len(moments)
             if camp.get("review", True) and lines:
                 telegram.send(f"Кампания {camp['name']}: {len(lines)} клипов из «{info.get('title', url)}» ждут "

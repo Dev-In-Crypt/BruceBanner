@@ -89,7 +89,7 @@ def build_planned(cfg, con) -> dict:
         out = cfg["data"] / "build" / f"clip_{p['id']}_{p['account']}.mp4"
         try:
             video.build_clip(p["src"], p["hook"], p["streamer"], cfg, out, seed=f"{p['account']}:{p['clip_id']}",
-                             bar=kick.campaign(cfg, p["campaign"]).get("bar", "kick"))
+                             camp=kick.campaign(cfg, p["campaign"]))
             state, fields = "built", {"file_path": str(out)}
         except Exception as e:  # noqa: BLE001
             log.warning("clip post %s build failed: %s", p["id"], e)

@@ -249,6 +249,11 @@ bind_code = ""                          # code from the Playerok bot: the next r
 
 # ---------- clipping.net: TikTok + YouTube Shorts, Kick streamer clips (docs/CLIPPING_PLAN.md) ----------
 # Separate from the Instagram/Playerok part above: own accounts, own tables, own commands (kick-*, clip-*).
+[watch]                                 # watch-campaigns: new promote.fun campaigns -> Telegram (budgets go in 1-2 days)
+promote_api = "https://dapper-duck-781.convex.cloud"   # the public backend their web app reads the list from
+platforms = ["tiktok", "youtube"]       # alert only when the campaign takes one of these ([] = all)
+highlight = "trailer|movie|film|tv|show|series|meme|episode"   # marked as hot in the alert
+
 [clipping]
 kick_api = "https://kick.com/api/v2"    # public web API, no key
 kick_period = "week"                    # top clips of: day | week | month | all
@@ -288,7 +293,7 @@ font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 [clipping.vod]                          # campaigns with source = "video": an OpenAI model picks moments of a long video
 model = "gpt-6-luna"                    # cheapest OpenAI model ($0.10 / $0.50 per 1M tokens): under a cent per video
-effort = "medium"                       # reasoning effort: none | low | medium | high
+effort = "high"                         # reasoning effort: none | low | medium | high (hooks need it)
                                         # key OPENAI_API_KEY in .env
 moments = 10
 min_sec = 20
@@ -309,9 +314,28 @@ name = "ako"                            # AKO x Clipping: $200 / 100K, 50K views
 source = "video"
 videos = ["https://www.youtube.com/watch?v=EuWoB_LRtW0"]   # the brief's Content links
 subject = "AKO"                         # focus of every clip; every hook names it (brief rule)
+rules = "AKO must be the main focus of every clip (speaking or clearly featured, never in the background); the on-screen text must mention AKO in a relevant way."
+about = "AKO's videos are vlogs: he shops, buys luxury watches, argues, runs from someone, gets into situations. Big money and luxury moments work best."
 language = "en"
 bar = "none"                            # brief: no logos of any kind
+layout = { video_h = 608, video_y = 640 }   # the whole 16:9 frame: a square crop cut AKO at the edge
 review = true                           # AI hooks wait for clip-approve
+caption = "{hook}"
+caption_tags = []
+post_window_hours = 72
+
+[[clipping.campaigns]]
+name = "clubcumming"                    # Club Cumming x Clipping, Episode 5: $200 / 100K, 100K to qualify, PayPal
+source = "video"
+videos = ["data/sources/CC_105.mp4"]   # the brief's MediaSilo file, downloaded
+subject = "Club Cumming"
+hook_names_subject = false              # the brief has no caption or on-screen text rule
+rules = "Your clips must feature the provided content. Audience: English."
+about = "Club Cumming is a TV series set in Alan Cumming's New York nightclub: performances, guests, party moments, drama and Alan Cumming's jokes. Pick the funniest, wildest, most surprising or emotional moments."
+language = "en"
+bar = "none"
+layout = { video_h = 608, video_y = 640 }
+review = true
 caption = "{hook}"
 caption_tags = []
 post_window_hours = 72
