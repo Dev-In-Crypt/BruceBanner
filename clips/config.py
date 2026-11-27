@@ -63,6 +63,9 @@ def load(path=None, check_files=True) -> dict:
     k = cfg.setdefault("clipping", {})  # clipping.net part (docs/CLIPPING_PLAN.md); absent in old configs
     k.setdefault("campaigns", [])
     k.setdefault("accounts", [])
+    for c in k["campaigns"]:
+        if c.get("watermark"):
+            c["watermark"] = _abs(c["watermark"])
     if "layout" in k:
         k["layout"]["bar_logo"] = _abs(k["layout"].get("bar_logo", ""))
     cfg["data"] = Path(_abs(cfg["data_dir"]))
@@ -190,6 +193,8 @@ def validate(cfg: dict, check_files=True) -> None:
             errors.append(f"campaign {c['name']}: source must be kick|video, bar kick|none")
         if c.get("source") == "video" and not c.get("subject"):
             errors.append(f"campaign {c['name']}: a video campaign needs subject (who the clips are about)")
+        if check_files and c.get("watermark") and not Path(c["watermark"]).is_file():
+            errors.append(f"campaign {c['name']}: watermark file not found: {c['watermark']}")
     for a in k["accounts"]:
         if a.get("platform") not in ("tiktok", "youtube", "x"):
             errors.append(f"clipping account {a.get('nick')}: platform must be tiktok, youtube or x")

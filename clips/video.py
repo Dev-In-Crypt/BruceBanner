@@ -485,6 +485,12 @@ def clip_overlay_png(cfg, hook, streamer, out, camp=None) -> None:
             d.rounded_rectangle([(W - tw) / 2 - 26, y - 6, (W + tw) / 2 + 26, y + lh + 6], radius=20, fill="white")
         for i, line in enumerate(lines):
             d.text((W / 2, y0 + i * lh + lh / 2), line, font=f, fill="black", anchor="mm")
+    if (camp or {}).get("watermark"):  # the brief's watermark: centered, inside the video, never at the screen edge
+        wm = Image.open(camp["watermark"]).convert("RGBA")
+        ww = L.get("watermark_w", 300)
+        wm = wm.resize((ww, round(wm.height * ww / wm.width)), Image.LANCZOS)
+        wy = L["video_y"] + round(L["video_h"] * L.get("watermark_y", 0.8)) - wm.height // 2
+        img.alpha_composite(wm, ((W - ww) // 2, wy))
     if bar == "none":
         img.save(out)
         return

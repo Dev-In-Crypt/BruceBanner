@@ -67,6 +67,17 @@ def test_build_clip_format(cfg, media, tmp_path):
     assert video.build_clip(media["src15_noaudio"], "", "x", cfg, tmp_path / "d.mp4", "s")["duration"] > 0  # no hook
 
 
+def test_overlay_watermark_centered_in_video(cfg, tmp_path):
+    from PIL import Image
+    wm = tmp_path / "wm.png"
+    Image.new("RGBA", (200, 100), (255, 0, 0, 255)).save(wm)
+    out = tmp_path / "o.png"
+    video.clip_overlay_png(cfg, "", "x", out, {"bar": "none", "watermark": str(wm)})
+    L, img = cfg["clipping"]["layout"], Image.open(out)
+    assert img.getpixel((540, L["video_y"] + round(L["video_h"] * 0.8)))[:3] == (255, 0, 0)  # centered, low in video
+    assert img.getpixel((20, L["video_y"] + round(L["video_h"] * 0.8)))[3] == 0  # not at the edge
+
+
 def test_plan_build_notify(cfg, con, media, monkeypatch):
     setup_campaign(cfg)
     cfg["clipping"]["accounts"] = [
