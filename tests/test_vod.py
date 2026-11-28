@@ -91,6 +91,7 @@ def test_campaign_layout_keeps_whole_frame(cfg, media, tmp_path):
 def test_local_file_campaign_without_subject_in_hook(cfg, media, monkeypatch):
     path, info = vod.download(cfg, str(media["src25"]), cfg["data"] / "sources")
     assert path == media["src25"] and info["title"] == "src25" and vod.video_id(str(media["src25"])) == "src25"
+    assert vod.video_id("data/sources/gone_file.mp4") == "gone_file"  # deleted source: same id, not cut again
     c = {**camp(cfg), "subject": "Club Cumming", "hook_names_subject": False, "about": "A nightclub TV show."}
     calls = fake_llm(monkeypatch, [{"start": 10, "end": 40, "hook": "Nobody expected this vacuum pitch", "why": "w",
                                     "score": 8}])

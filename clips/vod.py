@@ -63,7 +63,8 @@ Transcript ([start-end] seconds):
 
 def video_id(url: str) -> str:
     m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{6,})", url)
-    return m.group(1) if m else re.sub(r"\W", "_", Path(url).stem if Path(url).is_file() else url)[-32:]
+    # a local file keeps its id after it is deleted (maintenance, disk space), else it is cut again or fails
+    return m.group(1) if m else re.sub(r"\W", "_", url if "://" in url else Path(url).stem)[-32:]
 
 
 def download(cfg, url, out_dir: Path) -> tuple[Path, dict]:
